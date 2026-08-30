@@ -903,6 +903,11 @@ const MICRO_SOURCES = [
 
 const ALL_SOURCES = { macro: MACRO_SOURCES, micro: MICRO_SOURCES };
 
+// ── Mobile detection hook
+if(typeof document!=="undefined"){let vp=document.querySelector("meta[name=viewport]");if(!vp){vp=document.createElement("meta");vp.name="viewport";document.head.appendChild(vp);}vp.content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no";}
+
+const useIsMobile=()=>{const [m,setM]=React.useState(window.innerWidth<768);React.useEffect(()=>{const h=()=>setM(window.innerWidth<768);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);return m;};
+
 // ── Fast source lookup map (module-level) ────────────────────────────────────
 const ALL_SRCS_MAP = (()=>{
   const m={};
@@ -1969,6 +1974,8 @@ function Dashboard({user, onLogout}) {
     return ()=>window.removeEventListener('ecoscope-update',refresh);
   },[user.username]);
   const [sidebarWidth,setSidebarWidth]=useState(268);
+  const [sidebarOpen,setSidebarOpen]=useState(false);
+  const isMobile=useIsMobile();
   const isResizing=useRef(false);
   const T=useMemo(()=>({...C,...(THEMES[settings.theme||"dark"]||{})}), [settings.theme]);
   const plan=PLANS[liveUser.plan||"free"]||PLANS.free;
@@ -2585,6 +2592,7 @@ function Dashboard({user, onLogout}) {
                     const inBasket=active;
                     return(
                       <button key={v.code} onClick={()=>{
+                        if(isMobile) setSidebarOpen(false);
                         if(inBasket){
                           if(varBasket.length>1) setVarBasket(vb=>vb.filter(b=>!(b.sourceId===source.id&&b.varCode===v.code)));
                         } else {
@@ -2893,7 +2901,7 @@ function Dashboard({user, onLogout}) {
               </div>
             ) : viewMode==="chart" ? (
               <div id="ecoscope-chart-area">
-                <ResponsiveContainer width="100%" height={chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
+                <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
               </div>
             ) : (
               <div style={{maxHeight:360,overflowY:"auto"}}>
@@ -3369,7 +3377,8 @@ function AdminPanel({user, onLogout}) {
             <span style={{color:C.gold,fontSize:10,fontFamily:C.mono,fontWeight:700,letterSpacing:"0.1em"}}>ADMIN PANEL</span>
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:T.text,cursor:"pointer",padding:6,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/></button>}
           <div style={{display:"flex",gap:6,fontFamily:C.mono,fontSize:10}}>
             <span style={{color:C.teal}}>● {activeUsers} active</span>
             <span style={{color:C.dim}}>·</span>
@@ -3440,7 +3449,7 @@ function AdminPanel({user, onLogout}) {
                 <p style={{color:C.mid,fontSize:11,fontFamily:C.mono,margin:0}}>EcoScope Admin Dashboard · {new Date().toLocaleDateString("en-GB",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p>
               </div>
               {/* KPI row */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+              <div style={{display:isMobile?"flex":"grid",gridTemplateColumns:"repeat(4,1fr)",gap:isMobile?8:12,overflowX:isMobile?"auto":"visible",paddingBottom:isMobile?4:0,flexShrink:0}}>
                 {[
                   {icon:"👥",label:"Total Users",val:users.length,sub:`${activeUsers} active`,col:C.blue},
                   {icon:"📊",label:"Total Queries",val:totalQueries.toLocaleString(),sub:"session total",col:C.gold},
