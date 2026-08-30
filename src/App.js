@@ -2830,7 +2830,7 @@ function Dashboard({user, onLogout}) {
 
         {/* MAIN CONTENT */}
         {/* DRAG HANDLE */}
-        <div onMouseDown={startResize} style={{width:5,cursor:"col-resize",background:T.border,flexShrink:0,transition:"background .15s",display:"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.gold} onMouseLeave={e=>e.currentTarget.style.background=T.border}><div style={{width:2,height:40,borderRadius:2,background:"transparent"}}/></div>
+        <div onMouseDown={startResize} style={{width:isMobile?0:5,cursor:"col-resize",background:T.border,flexShrink:0,transition:"background .15s",display:isMobile?"none":"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.gold} onMouseLeave={e=>e.currentTarget.style.background=T.border}><div style={{width:2,height:40,borderRadius:2,background:"transparent"}}/></div>
         <main style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16,background:T.bg}}>
 
           {/* Source info banner */}
