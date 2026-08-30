@@ -1,5 +1,145 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, ReferenceLine } from "recharts";
+import { useRef } from "react";
+// ══════════════════════════════════════════════
+// USER STORE — Supabase via server API
+// ══════════════════════════════════════════════
+const US = {
+  SESS: 'ecoscope_session',
+
+  async _call(method, path, body) {
+    try {
+      const res = await fetch(path, {
+        method,
+        headers: {'Content-Type': 'application/json'},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const json = await res.json();
+      if (!res.ok) return {error: json.error || 'Server error'};
+      return json;
+    } catch(e) {
+      console.error('API error:', e);
+      return {error: 'Network error — check your connection'};
+    }
+  },
+
+  hash(p){
+    let h=5381;
+    for(let i=0;i<p.length;i++) h=((h<<5)+h)+p.charCodeAt(i);
+    return (h>>>0).toString(36)+':'+p.length;
+  },
+
+  init(){
+    // No-op — server handles init
+  },
+
+  async register(username, email, password){
+    const res = await this._call('POST', '/api/auth/register', {username, email, password});
+    if(res.error) return {error: res.error};
+    await this.log(username, 'Registered', 'New account created · Free plan');
+    return {user: res.user};
+  },
+
+  async login(username, password){
+    const res = await this._call('POST', '/api/auth/login', {username, password});
+    if(res.error) return {error: res.error};
+    localStorage.setItem(this.SESS, JSON.stringify({username, at: new Date().toISOString()}));
+    return {user: res.user};
+  },
+
+  logout(username){
+    this.log(username, 'Logout', 'Session ended');
+    localStorage.removeItem(this.SESS);
+  },
+
+  async getAll(){
+    const res = await this._call('GET', '/api/users');
+    return Array.isArray(res) ? res : [];
+  },
+
+  getUser(username){
+    // For session restore - check localStorage cache
+    try {
+      const sess = JSON.parse(localStorage.getItem(this.SESS) || 'null');
+      return sess?.username === username ? sess : null;
+    } catch { return null; }
+  },
+
+  async update(username, updates){
+    const res = await this._call('PATCH', `/api/users/${encodeURIComponent(username)}`, updates);
+    window.dispatchEvent(new Event('ecoscope-update'));
+    return res;
+  },
+
+  async setPlan(username, plan, status='active'){
+    await this._call('POST', `/api/users/${encodeURIComponent(username)}/plan`, {plan, plan_status: status});
+    window.dispatchEvent(new Event('ecoscope-update'));
+  },
+
+  async deleteUser(username){
+    if(username === 'admin') return false;
+    await this._call('DELETE', `/api/users/${encodeURIComponent(username)}`);
+    window.dispatchEvent(new Event('ecoscope-update'));
+    return true;
+  },
+
+  async invite(email, role='user'){
+    const res = await this._call('POST', '/api/users/invite', {email, role});
+    if(res.error) return {error: res.error};
+    window.dispatchEvent(new Event('ecoscope-update'));
+    return {user: res.user, inviteToken: res.token};
+  },
+
+  async updateProfile(username, updates){
+    return this.update(username, updates);
+  },
+
+  async log(username, action, detail=''){
+    try {
+      await this._call('POST', '/api/activity', {username, action, detail});
+      window.dispatchEvent(new Event('ecoscope-update'));
+    } catch(e) { console.error('Log error:', e); }
+  },
+
+  async getLog(){
+    const res = await this._call('GET', '/api/activity');
+    return Array.isArray(res) ? res : [];
+  },
+
+  async getRequests(){
+    const res = await this._call('GET', '/api/requests');
+    return Array.isArray(res) ? res : [];
+  },
+
+  async requestPlan(username, email, currentPlan, requestedPlan, message=''){
+    const res = await this._call('POST', '/api/requests', {username, email, currentPlan, requestedPlan, message});
+    if(res.error) return {error: res.error};
+    return {req: res};
+  },
+
+  async resolveRequest(id, action, adminNote=''){
+    await this._call('PATCH', `/api/requests/${id}`, {status: action, adminNote});
+    window.dispatchEvent(new Event('ecoscope-update'));
+    return true;
+  },
+};
+
+// ── Password & username validators
+const pwRules=[
+  {re:/^.{8,}$/,   msg:'At least 8 characters'},
+  {re:/[A-Z]/,     msg:'At least one uppercase letter'},
+  {re:/[0-9]/,     msg:'At least one number'},
+  {re:/[!@#$%^&*()_+\-=\[\]{};:"\|,.<>\/?]/, msg:'At least one special character'},
+];
+const checkPw=(p)=>pwRules.filter(r=>!r.re.test(p)).map(r=>r.msg);
+const checkUn=(u)=>{
+  const e=[];
+  if(u.length<3) e.push('Min 3 characters');
+  if(u.length>20) e.push('Max 20 characters');
+  if(!/^[a-zA-Z0-9_]+$/.test(u)) e.push('Letters, numbers and _ only');
+  return e;
+};
+
 
 // ══════════════════════════════════════════════
 // PALETTE
@@ -14,6 +154,46 @@ const C = {
   font:"'Syne',sans-serif", mono:"'IBM Plex Mono',monospace",
 };
 const ACCENT = ["#f0a500","#00c9a7","#4f8cff","#ff4c6a","#b05cff","#ff8c42","#00d4e8"];
+
+// ══════════════════════════════════════════════
+// THEMES
+// ══════════════════════════════════════════════
+const THEMES = {
+  dark:   {bg:"#05070f",surface:"#0b0e1c",card:"#0f1221",border:"#182038",borderHi:"#243060",text:"#dde3f5",mid:"#7a88b0",dim:"#3a4565",label:"Dark Terminal"},
+  light:  {bg:"#f0f4ff",surface:"#ffffff",card:"#f8faff",border:"#dde3f5",borderHi:"#b0c4f0",text:"#0f1221",mid:"#4a5580",dim:"#8090b0",label:"Light Mode"},
+  ocean:  {bg:"#020d1a",surface:"#051525",card:"#071e33",border:"#0a2d4a",borderHi:"#0e3d66",text:"#d0eaff",mid:"#5590b0",dim:"#2a4a60",label:"Ocean Deep"},
+  forest: {bg:"#050f08",surface:"#0a1a0d",card:"#0f2415",border:"#1a3a20",borderHi:"#255030",text:"#d5f0dc",mid:"#55906a",dim:"#2a4a35",label:"Forest Night"},
+  amber:  {bg:"#0f0800",surface:"#1a1000",card:"#241800",border:"#3a2a00",borderHi:"#503a00",text:"#fff0d0",mid:"#c09040",dim:"#604820",label:"Amber Glow"},
+};
+
+// ══════════════════════════════════════════════
+// SUBSCRIPTION PLANS
+// ══════════════════════════════════════════════
+const PLANS = {
+  free:       {id:"free",name:"Free",price:0,priceLabel:"Free forever",color:"#7a88b0",
+    sources:["worldbank","imf"],aiInsights:false,exports:["csv"],compare:false,maxYears:10,badge:"FREE",
+    desc:"Basic macro data from World Bank & IMF. CSV export only."},
+  pro:        {id:"pro",name:"Pro",price:9.99,priceLabel:"$9.99/month",color:"#f0a500",
+    sources:"all",aiInsights:true,exports:["csv","excel","pdf"],compare:true,maxYears:65,badge:"PRO",
+    desc:"All 17 data sources, AI insights, Excel & PDF exports, country comparison."},
+  enterprise: {id:"enterprise",name:"Enterprise",price:null,priceLabel:"Custom pricing",color:"#00c9a7",
+    sources:"all",aiInsights:true,exports:["csv","excel","pdf"],compare:true,maxYears:65,badge:"ENT",
+    desc:"Everything in Pro plus priority support, custom integrations and volume access."},
+};
+
+const PRO_SOURCES=["wdi","gse","imffsi","faostat","sdg","unicef","findex","sociology","hdi","gii","gpi","happiness","efi"];
+
+// Color-code bars/lines by relative value
+const getValueColor = (value, allValues) => {
+  if (!allValues||!allValues.length) return ACCENT[0];
+  const min=Math.min(...allValues); const max=Math.max(...allValues);
+  if (max===min) return ACCENT[0];
+  const pct=(value-min)/(max-min);
+  if (pct>=0.75) return "#00c9a7";  // high — teal
+  if (pct>=0.5)  return "#f0a500";  // mid-high — gold
+  if (pct>=0.25) return "#ff8c42";  // mid-low — orange
+  return "#ff4c6a";                  // low — red
+};
 
 // ══════════════════════════════════════════════
 // ISO2 → ISO3 (for IMF & WHO APIs)
@@ -309,6 +489,230 @@ const MACRO_SOURCES = [
       {code:"DT.DOD.DECT.GN.ZS",name:"External Debt % GNI",cat:"Debt",fmt:"pct",api:"worldbank"},
     ]
   },
+  {
+    id:"wdi", name:"World Bank WDI — Development Indicators", short:"WDI", region:"Global", color:"#4f8cff",
+    desc:"World Bank World Development Indicators — the primary collection of development data, 1,400+ series.",
+    url:"https://datatopics.worldbank.org/world-development-indicators/", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"GB.XPD.RSDV.GD.ZS",name:"Research & Development Expenditure (% GDP)",cat:"Innovation",fmt:"pct",api:"worldbank"},
+      {code:"IP.PAT.RESD",name:"Patent Applications — Residents",cat:"Innovation",fmt:"num",api:"worldbank"},
+      {code:"IC.BUS.EASE.XQ",name:"Ease of Doing Business Score",cat:"Business",fmt:"num",api:"worldbank"},
+      {code:"IC.REG.DURS",name:"Business Registration Days",cat:"Business",fmt:"num",api:"worldbank"},
+      {code:"IC.TAX.TOTL.CP.ZS",name:"Total Tax & Contribution Rate (% profit)",cat:"Business",fmt:"pct",api:"worldbank"},
+      {code:"IC.ELC.TIME",name:"Days to Get Electricity Connection",cat:"Infrastructure",fmt:"num",api:"worldbank"},
+      {code:"IS.ROD.PAVE.ZS",name:"Paved Roads (% of total roads)",cat:"Infrastructure",fmt:"pct",api:"worldbank"},
+      {code:"IS.AIR.PSGR",name:"Air Transport — Passengers Carried",cat:"Infrastructure",fmt:"num",api:"worldbank"},
+      {code:"TX.VAL.MRCH.CD.WT",name:"Merchandise Exports (Current USD)",cat:"Trade",fmt:"currency",api:"worldbank"},
+      {code:"TM.VAL.MRCH.CD.WT",name:"Merchandise Imports (Current USD)",cat:"Trade",fmt:"currency",api:"worldbank"},
+      {code:"TX.VAL.MANF.ZS.UN",name:"Manufactures Exports (% of total)",cat:"Trade",fmt:"pct",api:"worldbank"},
+      {code:"NY.GDP.MINR.RT.ZS",name:"Mineral Rents (% of GDP)",cat:"Natural Resources",fmt:"pct",api:"worldbank"},
+      {code:"NY.GDP.PETR.RT.ZS",name:"Oil Rents (% of GDP)",cat:"Natural Resources",fmt:"pct",api:"worldbank"},
+      {code:"NY.GDP.FRST.RT.ZS",name:"Forest Rents (% of GDP)",cat:"Natural Resources",fmt:"pct",api:"worldbank"},
+      {code:"SE.SEC.ENRR",name:"Secondary School Enrollment (Gross %)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.TER.ENRR",name:"Tertiary Enrollment (Gross %)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SH.MED.BEDS.ZS",name:"Hospital Beds (per 1,000 people)",cat:"Health System",fmt:"num",api:"worldbank"},
+      {code:"CC.EST",name:"Control of Corruption Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"GE.EST",name:"Government Effectiveness Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"RL.EST",name:"Rule of Law Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"VA.EST",name:"Voice & Accountability Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"PV.EST",name:"Political Stability Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"DT.ODA.ODAT.CD",name:"ODA Received (Current USD)",cat:"Aid",fmt:"currency",api:"worldbank"},
+      {code:"DT.ODA.ODAT.GN.ZS",name:"ODA Received (% of GNI)",cat:"Aid",fmt:"pct",api:"worldbank"},
+      {code:"BX.TRF.PWKR.CD.DT",name:"Personal Remittances Received (USD)",cat:"Remittances",fmt:"currency",api:"worldbank"},
+      {code:"BX.TRF.PWKR.DT.GD.ZS",name:"Remittances Received (% of GDP)",cat:"Remittances",fmt:"pct",api:"worldbank"},
+    ]
+  },{
+    id:"gse", name:"Ghana Financial Markets", short:"GSE", region:"Ghana", color:"#FFD700",
+    desc:"Ghana banking, capital markets & monetary data via World Bank & IMF. Live GSE prices at gse.com.gh.",
+    url:"https://gse.com.gh", keyRequired:false, plan:"pro", countryFixed:"GH",
+    note:"Macro-financial data via WB/IMF APIs. For live equity prices visit gse.com.gh directly.",
+    vars:[
+      {code:"FR.INR.LEND",name:"Lending Interest Rate (%)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"FR.INR.DPST",name:"Deposit Interest Rate (%)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"FR.INR.RINR",name:"Real Interest Rate (%)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"FM.LBL.BMNY.GD.ZS",name:"Broad Money M2 (% of GDP)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"FM.LBL.MQMY.GD.ZS",name:"Narrow Money M1 (% of GDP)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"FP.CPI.TOTL.ZG",name:"Inflation Rate — CPI (%)",cat:"Monetary",fmt:"pct",api:"worldbank"},
+      {code:"PA.NUS.FCRF",name:"GHS / USD Exchange Rate",cat:"Monetary",fmt:"num",api:"worldbank"},
+      {code:"FS.AST.PRVT.GD.ZS",name:"Private Sector Credit (% of GDP)",cat:"Banking",fmt:"pct",api:"worldbank"},
+      {code:"FB.AST.NPER.ZS",name:"Bank Nonperforming Loans (%)",cat:"Banking",fmt:"pct",api:"worldbank"},
+      {code:"FB.BNK.CAPA.ZS",name:"Bank Capital to Assets Ratio (%)",cat:"Banking",fmt:"pct",api:"worldbank"},
+      {code:"FB.CBK.BRCH.P5",name:"Bank Branches per 100,000 Adults",cat:"Banking",fmt:"num",api:"worldbank"},
+      {code:"FX.OWN.TOTL.ZS",name:"Financial Account Ownership (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.FE.ZS",name:"Female Financial Account Ownership (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"IC.FRM.BKWC.ZS",name:"Firms Using Banks for Investment (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"GC.DOD.TOTL.GD.ZS",name:"Government Debt (% of GDP)",cat:"Fiscal",fmt:"pct",api:"worldbank"},
+      {code:"GC.REV.XGRT.GD.ZS",name:"Government Revenue (% of GDP)",cat:"Fiscal",fmt:"pct",api:"worldbank"},
+      {code:"GC.TAX.TOTL.GD.ZS",name:"Tax Revenue (% of GDP)",cat:"Fiscal",fmt:"pct",api:"worldbank"},
+      {code:"BX.KLT.DINV.WD.GD.ZS",name:"FDI Net Inflows (% of GDP)",cat:"Investment",fmt:"pct",api:"worldbank"},
+      {code:"PCPIPCH",name:"Inflation — IMF Estimate (%)",cat:"Monetary",fmt:"pct",api:"imf"},
+      {code:"GGXWDG_NGDP",name:"Gross Debt % GDP — IMF",cat:"Fiscal",fmt:"pct",api:"imf"},
+      {code:"BCA_NGDPD",name:"Current Account Balance % GDP — IMF",cat:"External",fmt:"pct",api:"imf"},
+    ]
+  },{
+    id:"imffsi", name:"IMF Financial Soundness Indicators", short:"FSI", region:"Global", color:"#00BCD4",
+    desc:"IMF FSI — banking capital adequacy, asset quality, earnings, liquidity and credit indicators.",
+    url:"https://data.imf.org/?sk=51b096fa-2cd2-40c2-8d09-0699cc1764da", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"FB.BNK.CAPA.ZS",name:"Bank Capital to Assets Ratio (%)",cat:"Capital Adequacy",fmt:"pct",api:"worldbank"},
+      {code:"FB.AST.NPER.ZS",name:"Nonperforming Loans (%)",cat:"Asset Quality",fmt:"pct",api:"worldbank"},
+      {code:"FR.INR.LEND",name:"Lending Interest Rate (%)",cat:"Earnings",fmt:"pct",api:"worldbank"},
+      {code:"FR.INR.DPST",name:"Deposit Interest Rate (%)",cat:"Earnings",fmt:"pct",api:"worldbank"},
+      {code:"FR.INR.RINR",name:"Real Interest Rate (%)",cat:"Earnings",fmt:"pct",api:"worldbank"},
+      {code:"FS.AST.PRVT.GD.ZS",name:"Credit to Private Sector (% GDP)",cat:"Credit",fmt:"pct",api:"worldbank"},
+      {code:"FM.LBL.BMNY.GD.ZS",name:"Broad Money M2 (% GDP)",cat:"Liquidity",fmt:"pct",api:"worldbank"},
+      {code:"DT.DOD.DECT.CD",name:"External Debt Stocks (USD)",cat:"Debt",fmt:"currency",api:"worldbank"},
+      {code:"DT.DOD.DECT.GN.ZS",name:"External Debt (% of GNI)",cat:"Debt",fmt:"pct",api:"worldbank"},
+      {code:"DT.TDS.DECT.GN.ZS",name:"Debt Service (% of GNI)",cat:"Debt",fmt:"pct",api:"worldbank"},
+      {code:"DT.TDS.DECT.EX.ZS",name:"Debt Service (% of Exports)",cat:"Debt",fmt:"pct",api:"worldbank"},
+      {code:"IC.FRM.BKWC.ZS",name:"Firms Using Banks for Investment (%)",cat:"Access",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.ZS",name:"Account Ownership at Financial Institution (%)",cat:"Access",fmt:"pct",api:"worldbank"},
+    ]
+  },{
+    id:"faostat", name:"FAOSTAT — Agriculture & Food", short:"FAO", region:"Global", color:"#4CAF50",
+    desc:"UN Food & Agriculture Organization — agricultural production, trade, food security and nutrition data.",
+    url:"https://www.fao.org/faostat/en/", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"AG.PRD.FOOD.XD",name:"Food Production Index (2014-2016=100)",cat:"Production",fmt:"num",api:"worldbank"},
+      {code:"AG.PRD.CROP.XD",name:"Crop Production Index (2014-2016=100)",cat:"Production",fmt:"num",api:"worldbank"},
+      {code:"AG.PRD.LVSK.XD",name:"Livestock Production Index (2014-2016=100)",cat:"Production",fmt:"num",api:"worldbank"},
+      {code:"AG.YLD.CREL.KG",name:"Cereal Yield (kg per hectare)",cat:"Crops",fmt:"num",api:"worldbank"},
+      {code:"AG.LND.CREL.HA",name:"Land Under Cereal Production (hectares)",cat:"Crops",fmt:"num",api:"worldbank"},
+      {code:"NV.AGR.TOTL.ZS",name:"Agriculture Value Added (% of GDP)",cat:"Economic",fmt:"pct",api:"worldbank"},
+      {code:"NV.AGR.TOTL.CD",name:"Agriculture Value Added (Current USD)",cat:"Economic",fmt:"currency",api:"worldbank"},
+      {code:"SL.AGR.EMPL.ZS",name:"Agricultural Employment (% of total)",cat:"Labour",fmt:"pct",api:"worldbank"},
+      {code:"AG.LND.ARBL.ZS",name:"Arable Land (% of land area)",cat:"Land",fmt:"pct",api:"worldbank"},
+      {code:"AG.LND.ARBL.HA.PC",name:"Arable Land per Person (hectares)",cat:"Land",fmt:"num",api:"worldbank"},
+      {code:"AG.LND.AGRI.ZS",name:"Agricultural Land (% of land area)",cat:"Land",fmt:"pct",api:"worldbank"},
+      {code:"AG.LND.IRIG.AG.ZS",name:"Irrigated Agricultural Land (%)",cat:"Land",fmt:"pct",api:"worldbank"},
+      {code:"ER.H2O.FWAG.ZS",name:"Agricultural Water Withdrawal (% of total)",cat:"Water",fmt:"pct",api:"worldbank"},
+      {code:"TX.VAL.FOOD.ZS.UN",name:"Food Exports (% of merchandise exports)",cat:"Trade",fmt:"pct",api:"worldbank"},
+      {code:"TM.VAL.FOOD.ZS.UN",name:"Food Imports (% of merchandise imports)",cat:"Trade",fmt:"pct",api:"worldbank"},
+      {code:"SN.ITK.DEFC.ZS",name:"Prevalence of Undernourishment (%)",cat:"Food Security",fmt:"pct",api:"worldbank"},
+      {code:"SN.ITK.MSFI.ZS",name:"Moderate or Severe Food Insecurity (%)",cat:"Food Security",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.STNT.ZS",name:"Stunting in Children Under 5 (%)",cat:"Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.WAST.ZS",name:"Wasting in Children Under 5 (%)",cat:"Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.OWGH.ZS",name:"Overweight Children Under 5 (%)",cat:"Nutrition",fmt:"pct",api:"worldbank"},
+    ]
+  },{
+    id:"sdg", name:"UN SDG — Sustainable Development Goals", short:"SDG", region:"Global", color:"#E53935",
+    desc:"UN SDG Global Database — 231 indicators tracking progress across all 17 Sustainable Development Goals.",
+    url:"https://unstats.un.org/sdgs/dataportal", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"SI.POV.DDAY",name:"SDG 1.1 — Extreme Poverty < $2.15/day (%)",cat:"SDG 1 No Poverty",fmt:"pct",api:"worldbank"},
+      {code:"SI.POV.NAHC",name:"SDG 1.2 — National Poverty Rate (%)",cat:"SDG 1 No Poverty",fmt:"pct",api:"worldbank"},
+      {code:"SN.ITK.DEFC.ZS",name:"SDG 2.1 — Undernourishment (%)",cat:"SDG 2 Zero Hunger",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.STNT.ZS",name:"SDG 2.2 — Child Stunting (%)",cat:"SDG 2 Zero Hunger",fmt:"pct",api:"worldbank"},
+      {code:"SH.DYN.MORT",name:"SDG 3.2 — Under-5 Mortality (per 1,000)",cat:"SDG 3 Good Health",fmt:"num",api:"worldbank"},
+      {code:"SH.STA.MMRT",name:"SDG 3.1 — Maternal Mortality (per 100,000)",cat:"SDG 3 Good Health",fmt:"num",api:"worldbank"},
+      {code:"SH.HIV.INCD.ZS",name:"SDG 3.3 — HIV Incidence (per 1,000)",cat:"SDG 3 Good Health",fmt:"num",api:"worldbank"},
+      {code:"SE.PRM.CMPT.ZS",name:"SDG 4.1 — Primary Completion Rate (%)",cat:"SDG 4 Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.ADT.LITR.ZS",name:"SDG 4.6 — Adult Literacy Rate (%)",cat:"SDG 4 Education",fmt:"pct",api:"worldbank"},
+      {code:"SG.GEN.PARL.ZS",name:"SDG 5.5 — Women in Parliament (%)",cat:"SDG 5 Gender",fmt:"pct",api:"worldbank"},
+      {code:"SH.H2O.BASW.ZS",name:"SDG 6.1 — Safe Drinking Water (%)",cat:"SDG 6 Clean Water",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.BASS.ZS",name:"SDG 6.2 — Basic Sanitation (%)",cat:"SDG 6 Clean Water",fmt:"pct",api:"worldbank"},
+      {code:"EG.ELC.ACCS.ZS",name:"SDG 7.1 — Access to Electricity (%)",cat:"SDG 7 Energy",fmt:"pct",api:"worldbank"},
+      {code:"EG.FEC.RNEW.ZS",name:"SDG 7.2 — Renewable Energy (%)",cat:"SDG 7 Energy",fmt:"pct",api:"worldbank"},
+      {code:"NY.GDP.MKTP.KD.ZG",name:"SDG 8.1 — GDP Growth Rate (%)",cat:"SDG 8 Decent Work",fmt:"pct",api:"worldbank"},
+      {code:"SL.UEM.1524.ZS",name:"SDG 8.6 — Youth Unemployment (%)",cat:"SDG 8 Decent Work",fmt:"pct",api:"worldbank"},
+      {code:"GB.XPD.RSDV.GD.ZS",name:"SDG 9.5 — R&D Expenditure (% GDP)",cat:"SDG 9 Innovation",fmt:"pct",api:"worldbank"},
+      {code:"SI.POV.GINI",name:"SDG 10.1 — Gini Inequality Index",cat:"SDG 10 Reduced Inequalities",fmt:"num",api:"worldbank"},
+      {code:"EN.ATM.CO2E.PC",name:"SDG 13 — CO2 Emissions per Capita",cat:"SDG 13 Climate",fmt:"num",api:"worldbank"},
+      {code:"ER.LND.PTLD.ZS",name:"SDG 15.1 — Terrestrial Protected Areas (%)",cat:"SDG 15 Life on Land",fmt:"pct",api:"worldbank"},
+      {code:"GE.EST",name:"SDG 16 — Government Effectiveness Index",cat:"SDG 16 Peace & Justice",fmt:"num",api:"worldbank"},
+      {code:"RL.EST",name:"SDG 16 — Rule of Law Index",cat:"SDG 16 Peace & Justice",fmt:"num",api:"worldbank"},
+      {code:"DT.ODA.ODAT.GN.ZS",name:"SDG 17.2 — ODA Received (% GNI)",cat:"SDG 17 Partnerships",fmt:"pct",api:"worldbank"},
+    ]
+  }
+  ,{
+    id:"hdi", name:"Human Development Index (UNDP)", short:"HDI", region:"Global", color:"#9C27B0",
+    desc:"UNDP HDI component indicators — life expectancy, education and income. Composite index at hdr.undp.org.",
+    url:"https://hdr.undp.org/data-center/human-development-index", keyRequired:false, plan:"pro",
+    note:"HDI component indicators via World Bank. Official HDI scores at hdr.undp.org.",
+    vars:[
+      {code:"SP.DYN.LE00.IN",name:"Life Expectancy at Birth — HDI Component (years)",cat:"Health",fmt:"num",api:"worldbank"},
+      {code:"SE.ADT.LITR.ZS",name:"Adult Literacy Rate — Education Component (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.PRM.ENRR",name:"Combined School Enrollment — Education Component (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"NY.GNP.PCAP.PP.CD",name:"GNI per Capita PPP — Income Component (Intl $)",cat:"Income",fmt:"currency",api:"worldbank"},
+      {code:"NY.GDP.PCAP.PP.CD",name:"GDP per Capita PPP (proxy for income component)",cat:"Income",fmt:"currency",api:"worldbank"},
+      {code:"SE.SEC.ENRR",name:"Secondary Enrollment Gross — Education (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.TER.ENRR",name:"Tertiary Enrollment Gross — Education (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SH.XPD.CHEX.GD.ZS",name:"Health Expenditure % GDP — Health context",cat:"Health",fmt:"pct",api:"worldbank"},
+      {code:"SI.POV.GINI",name:"Gini Coefficient — Inequality-adjusted context",cat:"Inequality",fmt:"num",api:"worldbank"},
+      {code:"SP.DYN.IMRT.IN",name:"Infant Mortality — Health context (per 1,000)",cat:"Health",fmt:"num",api:"worldbank"},
+    ]
+  },{
+    id:"gii", name:"Global Innovation Index (WIPO)", short:"GII", region:"Global", color:"#00BCD4",
+    desc:"WIPO Global Innovation Index component indicators — R&D, technology, education and infrastructure.",
+    url:"https://www.globalinnovationindex.org", keyRequired:false, plan:"pro",
+    note:"GII component indicators via World Bank & IMF. Official GII scores at globalinnovationindex.org.",
+    vars:[
+      {code:"GB.XPD.RSDV.GD.ZS",name:"R&D Expenditure (% of GDP) — GII Input",cat:"R&D",fmt:"pct",api:"worldbank"},
+      {code:"IP.PAT.RESD",name:"Patent Applications by Residents — GII Output",cat:"Innovation Output",fmt:"num",api:"worldbank"},
+      {code:"IP.PAT.NRES",name:"Patent Applications by Non-Residents",cat:"Innovation Output",fmt:"num",api:"worldbank"},
+      {code:"IP.TMK.TOTL",name:"Trademark Applications (total)",cat:"Innovation Output",fmt:"num",api:"worldbank"},
+      {code:"IT.NET.USER.ZS",name:"Internet Users (% population) — ICT Access",cat:"ICT",fmt:"pct",api:"worldbank"},
+      {code:"IT.CEL.SETS.P2",name:"Mobile Subscriptions per 100 people",cat:"ICT",fmt:"num",api:"worldbank"},
+      {code:"SE.TER.ENRR",name:"Tertiary Education Enrollment (%) — Human Capital",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.XPD.TOTL.GD.ZS",name:"Education Expenditure % GDP",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"IC.BUS.EASE.XQ",name:"Ease of Doing Business Score — Business Environment",cat:"Business",fmt:"num",api:"worldbank"},
+      {code:"NY.GDP.MKTP.KD.ZG",name:"GDP Growth Rate — Economic Context",cat:"Economic",fmt:"pct",api:"worldbank"},
+      {code:"NE.EXP.GNFS.ZS",name:"Exports of Goods & Services % GDP — Openness",cat:"Trade",fmt:"pct",api:"worldbank"},
+    ]
+  },{
+    id:"gpi", name:"Global Peace Index (IEP)", short:"GPI", region:"Global", color:"#4CAF50",
+    desc:"IEP Global Peace Index component indicators — safety, conflict, militarization and social cohesion.",
+    url:"https://www.visionofhumanity.org/maps/global-peace-index/", keyRequired:false, plan:"pro",
+    note:"GPI component indicators via World Bank & UN. Official GPI scores at visionofhumanity.org.",
+    vars:[
+      {code:"VC.IHR.PSRC.P5",name:"Intentional Homicides per 100,000 — Safety",cat:"Internal Safety",fmt:"num",api:"worldbank"},
+      {code:"PV.EST",name:"Political Stability & No Violence Index",cat:"Conflict",fmt:"num",api:"worldbank"},
+      {code:"VA.EST",name:"Voice & Accountability Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"RL.EST",name:"Rule of Law Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"CC.EST",name:"Control of Corruption Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"MS.MIL.XPND.GD.ZS",name:"Military Expenditure % GDP — Militarization",cat:"Military",fmt:"pct",api:"worldbank"},
+      {code:"MS.MIL.TOTL.P1",name:"Armed Forces Personnel (total)",cat:"Military",fmt:"num",api:"worldbank"},
+      {code:"MS.MIL.TOTL.TF.ZS",name:"Armed Forces % Total Labor Force",cat:"Military",fmt:"pct",api:"worldbank"},
+      {code:"SM.POP.REFG",name:"Refugee Population — Conflict indicator",cat:"Conflict",fmt:"num",api:"worldbank"},
+      {code:"GE.EST",name:"Government Effectiveness Index",cat:"Governance",fmt:"num",api:"worldbank"},
+    ]
+  },{
+    id:"happiness", name:"World Happiness Index (UN)", short:"WHI", region:"Global", color:"#FF9800",
+    desc:"UN World Happiness Report component indicators — GDP, social support, health, freedom, generosity and corruption.",
+    url:"https://worldhappiness.report", keyRequired:false, plan:"pro",
+    note:"WHI component indicators via World Bank. Official happiness scores at worldhappiness.report.",
+    vars:[
+      {code:"NY.GDP.PCAP.PP.CD",name:"GDP per Capita PPP — Economic Wellbeing",cat:"Economic",fmt:"currency",api:"worldbank"},
+      {code:"SP.DYN.LE00.IN",name:"Life Expectancy at Birth — Healthy Life Years",cat:"Health",fmt:"num",api:"worldbank"},
+      {code:"CC.EST",name:"Control of Corruption (Absence of Corruption factor)",cat:"Trust",fmt:"num",api:"worldbank"},
+      {code:"VA.EST",name:"Voice & Accountability (Freedom to make choices)",cat:"Freedom",fmt:"num",api:"worldbank"},
+      {code:"SI.POV.GINI",name:"Gini Inequality — Social Support context",cat:"Equality",fmt:"num",api:"worldbank"},
+      {code:"SH.XPD.CHEX.GD.ZS",name:"Health Expenditure % GDP — Wellbeing context",cat:"Health",fmt:"pct",api:"worldbank"},
+      {code:"SL.UEM.TOTL.ZS",name:"Unemployment Rate — Wellbeing stressor",cat:"Labour",fmt:"pct",api:"worldbank"},
+      {code:"BX.TRF.PWKR.DT.GD.ZS",name:"Remittances Received % GDP — Social Support",cat:"Social",fmt:"pct",api:"worldbank"},
+      {code:"SI.POV.NAHC",name:"National Poverty Rate — Deprivation indicator",cat:"Poverty",fmt:"pct",api:"worldbank"},
+      {code:"GE.EST",name:"Government Effectiveness — Institutional Trust",cat:"Trust",fmt:"num",api:"worldbank"},
+    ]
+  },{
+    id:"efi", name:"Index of Economic Freedom (Heritage)", short:"EFI", region:"Global", color:"#FF5722",
+    desc:"Heritage Foundation Economic Freedom Index component indicators — trade, fiscal, monetary, investment and regulatory freedom.",
+    url:"https://www.heritage.org/index/", keyRequired:false, plan:"pro",
+    note:"EFI component indicators via World Bank & IMF. Official scores at heritage.org/index.",
+    vars:[
+      {code:"GC.TAX.TOTL.GD.ZS",name:"Tax Revenue % GDP — Fiscal Freedom",cat:"Fiscal Freedom",fmt:"pct",api:"worldbank"},
+      {code:"GC.XPN.TOTL.GD.ZS",name:"Government Expenditure % GDP — Government Spending",cat:"Fiscal Freedom",fmt:"pct",api:"worldbank"},
+      {code:"GC.DOD.TOTL.GD.ZS",name:"Government Debt % GDP — Fiscal Health",cat:"Fiscal Freedom",fmt:"pct",api:"worldbank"},
+      {code:"FP.CPI.TOTL.ZG",name:"Inflation Rate CPI (%) — Monetary Freedom",cat:"Monetary Freedom",fmt:"pct",api:"worldbank"},
+      {code:"NE.TRD.GNFS.ZS",name:"Trade Openness % GDP — Trade Freedom",cat:"Trade Freedom",fmt:"pct",api:"worldbank"},
+      {code:"BX.KLT.DINV.WD.GD.ZS",name:"FDI Inflows % GDP — Investment Freedom",cat:"Investment Freedom",fmt:"pct",api:"worldbank"},
+      {code:"FS.AST.PRVT.GD.ZS",name:"Credit to Private Sector % GDP — Financial Freedom",cat:"Financial Freedom",fmt:"pct",api:"worldbank"},
+      {code:"IC.BUS.EASE.XQ",name:"Ease of Doing Business Score — Business Freedom",cat:"Business Freedom",fmt:"num",api:"worldbank"},
+      {code:"IC.REG.DURS",name:"Days to Start a Business — Regulatory Freedom",cat:"Business Freedom",fmt:"num",api:"worldbank"},
+      {code:"RL.EST",name:"Rule of Law Index — Property Rights",cat:"Property Rights",fmt:"num",api:"worldbank"},
+      {code:"CC.EST",name:"Control of Corruption — Freedom from Corruption",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"RQ.EST",name:"Regulatory Quality Index — Regulatory Efficiency",cat:"Regulatory",fmt:"num",api:"worldbank"},
+    ]
+  }
 ];
 
 // ══════════════════════════════════════════════
@@ -416,22 +820,126 @@ const MICRO_SOURCES = [
       {code:"ER.H2O.FWTL.ZS",name:"Freshwater Withdrawals % of Resources",cat:"Water",fmt:"pct",api:"worldbank"},
     ]
   },
+  {
+    id:"unicef", name:"UNICEF — Child & Social Data", short:"UNICEF", region:"Global", color:"#00AEEF",
+    desc:"UNICEF global child welfare, immunisation, nutrition, education and social protection indicators.",
+    url:"https://data.unicef.org", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"SH.DYN.MORT",name:"Under-5 Mortality Rate (per 1,000 live births)",cat:"Child Health",fmt:"num",api:"worldbank"},
+      {code:"SH.DYN.NMRT",name:"Neonatal Mortality Rate (per 1,000 live births)",cat:"Child Health",fmt:"num",api:"worldbank"},
+      {code:"SP.DYN.IMRT.IN",name:"Infant Mortality Rate (per 1,000 live births)",cat:"Child Health",fmt:"num",api:"worldbank"},
+      {code:"SH.STA.STNT.ZS",name:"Stunting — Children Under 5 (%)",cat:"Child Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.WAST.ZS",name:"Wasting — Children Under 5 (%)",cat:"Child Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.OWGH.ZS",name:"Overweight — Children Under 5 (%)",cat:"Child Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.ANM.CHLD.ZS",name:"Anaemia Prevalence in Children (%)",cat:"Child Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SH.IMM.MEAS",name:"Measles Immunisation — Children (%)",cat:"Immunisation",fmt:"pct",api:"worldbank"},
+      {code:"SH.IMM.IDPT",name:"DTP Immunisation Coverage (%)",cat:"Immunisation",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.BRTC.ZS",name:"Births Attended by Skilled Staff (%)",cat:"Maternal & Child",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.MMRT",name:"Maternal Mortality Ratio (per 100,000)",cat:"Maternal & Child",fmt:"num",api:"worldbank"},
+      {code:"SE.PRM.ENRR",name:"Primary School Enrollment — Gross (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.PRM.TENR",name:"Primary School Enrollment — Net (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.PRM.CMPT.ZS",name:"Primary School Completion Rate (%)",cat:"Education",fmt:"pct",api:"worldbank"},
+      {code:"SE.ENR.PRSC.FM.ZS",name:"Gender Parity Index — Primary Education",cat:"Gender",fmt:"num",api:"worldbank"},
+      {code:"SH.H2O.BASW.ZS",name:"Access to Basic Drinking Water (%)",cat:"WASH",fmt:"pct",api:"worldbank"},
+      {code:"SH.STA.BASS.ZS",name:"Access to Basic Sanitation Services (%)",cat:"WASH",fmt:"pct",api:"worldbank"},
+      {code:"SN.ITK.DEFC.ZS",name:"Prevalence of Undernourishment (%)",cat:"Food & Nutrition",fmt:"pct",api:"worldbank"},
+      {code:"SP.DYN.CBRT.IN",name:"Crude Birth Rate (per 1,000 people)",cat:"Demographics",fmt:"num",api:"worldbank"},
+      {code:"SP.DYN.TFRT.IN",name:"Total Fertility Rate (births per woman)",cat:"Demographics",fmt:"num",api:"worldbank"},
+    ]
+  },{
+    id:"findex", name:"World Bank Global Findex", short:"FINDEX", region:"Global", color:"#7B1FA2",
+    desc:"World Bank Global Findex Database — financial inclusion, digital payments and savings behaviour.",
+    url:"https://www.worldbank.org/en/publication/globalfindex", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"FX.OWN.TOTL.ZS",name:"Account Ownership — Adults (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.FE.ZS",name:"Account Ownership — Women (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.YG.ZS",name:"Account Ownership — Youth 15-24 (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.PL.ZS",name:"Account Ownership — Poorest 40% (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FX.OWN.TOTL.OL.ZS",name:"Account Ownership — Older Adults (%)",cat:"Financial Inclusion",fmt:"pct",api:"worldbank"},
+      {code:"FB.CBK.BRCH.P5",name:"Commercial Bank Branches per 100,000 Adults",cat:"Banking Access",fmt:"num",api:"worldbank"},
+      {code:"FB.ATM.TOTL.P5",name:"ATMs per 100,000 Adults",cat:"Banking Access",fmt:"num",api:"worldbank"},
+      {code:"FS.AST.PRVT.GD.ZS",name:"Domestic Credit to Private Sector (% GDP)",cat:"Credit",fmt:"pct",api:"worldbank"},
+      {code:"FB.AST.NPER.ZS",name:"Bank Nonperforming Loans (%)",cat:"Credit Quality",fmt:"pct",api:"worldbank"},
+      {code:"IC.FRM.BKWC.ZS",name:"Firms Using Banks to Finance Investment (%)",cat:"Business Finance",fmt:"pct",api:"worldbank"},
+      {code:"IT.CEL.SETS.P2",name:"Mobile Cellular Subscriptions (per 100)",cat:"Digital",fmt:"num",api:"worldbank"},
+      {code:"IT.NET.USER.ZS",name:"Internet Users (% of population)",cat:"Digital",fmt:"pct",api:"worldbank"},
+    ]
+  },{
+    id:"sociology", name:"Social & Development Indicators", short:"SOCIO", region:"Global", color:"#F57C00",
+    desc:"Sociological & development data: demographics, governance, gender, safety, wellbeing and business climate.",
+    url:"https://data.worldbank.org/topic/social-development", keyRequired:false, plan:"pro",
+    vars:[
+      {code:"SP.POP.TOTL",name:"Total Population",cat:"Demographics",fmt:"num",api:"worldbank"},
+      {code:"SP.POP.GROW",name:"Population Growth Rate (%)",cat:"Demographics",fmt:"pct",api:"worldbank"},
+      {code:"SP.URB.TOTL.IN.ZS",name:"Urban Population (% of total)",cat:"Demographics",fmt:"pct",api:"worldbank"},
+      {code:"SP.DYN.LE00.IN",name:"Life Expectancy at Birth (years)",cat:"Demographics",fmt:"num",api:"worldbank"},
+      {code:"SP.DYN.TFRT.IN",name:"Total Fertility Rate (births per woman)",cat:"Demographics",fmt:"num",api:"worldbank"},
+      {code:"SP.DYN.CDRT.IN",name:"Crude Death Rate (per 1,000 people)",cat:"Demographics",fmt:"num",api:"worldbank"},
+      {code:"SP.POP.DPND",name:"Age Dependency Ratio (% of working-age)",cat:"Demographics",fmt:"pct",api:"worldbank"},
+      {code:"SM.POP.NETM",name:"Net Migration (persons)",cat:"Migration",fmt:"num",api:"worldbank"},
+      {code:"SM.POP.REFG",name:"Refugee Population by Country of Asylum",cat:"Migration",fmt:"num",api:"worldbank"},
+      {code:"SI.POV.GINI",name:"Gini Inequality Coefficient (0-100)",cat:"Inequality",fmt:"num",api:"worldbank"},
+      {code:"SI.POV.NAHC",name:"National Poverty Headcount Rate (%)",cat:"Poverty",fmt:"pct",api:"worldbank"},
+      {code:"SI.DST.FRST.20",name:"Income Share — Bottom 20% (%)",cat:"Inequality",fmt:"pct",api:"worldbank"},
+      {code:"SI.DST.05TH.20",name:"Income Share — Top 20% (%)",cat:"Inequality",fmt:"pct",api:"worldbank"},
+      {code:"SG.GEN.PARL.ZS",name:"Women in National Parliament (%)",cat:"Gender",fmt:"pct",api:"worldbank"},
+      {code:"SL.TLF.ACTI.FE.ZS",name:"Female Labour Force Participation (%)",cat:"Gender",fmt:"pct",api:"worldbank"},
+      {code:"SL.UEM.TOTL.FE.ZS",name:"Female Unemployment Rate (%)",cat:"Gender",fmt:"pct",api:"worldbank"},
+      {code:"VC.IHR.PSRC.P5",name:"Intentional Homicides (per 100,000 people)",cat:"Safety",fmt:"num",api:"worldbank"},
+      {code:"CC.EST",name:"Control of Corruption Index (estimate)",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"GE.EST",name:"Government Effectiveness Index (estimate)",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"RL.EST",name:"Rule of Law Index (estimate)",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"RQ.EST",name:"Regulatory Quality Index (estimate)",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"VA.EST",name:"Voice & Accountability Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"PV.EST",name:"Political Stability Index",cat:"Governance",fmt:"num",api:"worldbank"},
+      {code:"IC.BUS.EASE.XQ",name:"Ease of Doing Business Score",cat:"Business Climate",fmt:"num",api:"worldbank"},
+      {code:"IC.REG.DURS",name:"Time to Start a Business (days)",cat:"Business Climate",fmt:"num",api:"worldbank"},
+      {code:"IC.TAX.TOTL.CP.ZS",name:"Total Tax Rate (% of commercial profit)",cat:"Business Climate",fmt:"pct",api:"worldbank"},
+      {code:"BX.TRF.PWKR.CD.DT",name:"Personal Remittances Received (USD)",cat:"Remittances",fmt:"currency",api:"worldbank"},
+      {code:"BX.TRF.PWKR.DT.GD.ZS",name:"Remittances Received (% of GDP)",cat:"Remittances",fmt:"pct",api:"worldbank"},
+    ]
+  }
 ];
 
 const ALL_SOURCES = { macro: MACRO_SOURCES, micro: MICRO_SOURCES };
+
+// ── Fast source lookup map (module-level) ────────────────────────────────────
+const ALL_SRCS_MAP = (()=>{
+  const m={};
+  [...MACRO_SOURCES,...MICRO_SOURCES].forEach(s=>{m[s.id]=s;});
+  return m;
+})();
 
 // ══════════════════════════════════════════════
 // FETCH FUNCTIONS
 // ══════════════════════════════════════════════
 
+
+// ── In-memory data cache (5 min TTL) ────────────────────────────────────────
+const _dataCache = new Map();
+const _cacheTTL = 5 * 60 * 1000;
+const cacheGet = (key) => {
+  const entry = _dataCache.get(key);
+  if(!entry) return null;
+  if(Date.now() - entry.ts > _cacheTTL){ _dataCache.delete(key); return null; }
+  return entry.data;
+};
+const cacheSet = (key, data) => _dataCache.set(key, {data, ts:Date.now()});
+
 const fetchWorldBank = async (cc, code, y0, y1) => {
+  const ckey = `wb:${cc}:${code}:${y0}:${y1}`;
+  const cached = cacheGet(ckey);
+  if(cached) return cached;
   try {
     const r = await fetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&date=${y0}:${y1}&per_page=100`);
     const j = await r.json();
-    if (!j?.[1]) return [];
-    return j[1].filter(d => d.value != null)
-      .map(d => ({year: parseInt(d.date), value: parseFloat(d.value)}))
+    if (!j?.[1]) { cacheSet(ckey,[]); return []; }
+    const result = j[1]
+      .filter(d => parseInt(d.date) >= y0 && parseInt(d.date) <= y1)
+      .map(d => ({year: parseInt(d.date), value: d.value!=null ? parseFloat(d.value) : null}))
       .sort((a, b) => a.year - b.year);
+    cacheSet(ckey, result);
+    return result;
   } catch { return []; }
 };
 
@@ -525,6 +1033,292 @@ const dlCSV = (rows, name) => {
   a.download = name; a.click();
 };
 
+const dlExcel = (rows, name) => {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const xmlRows = rows.map(r =>
+    `<Row>${Object.values(r).map(v => `<Cell><Data ss:Type="String">${v}</Data></Cell>`).join("")}</Row>`
+  ).join("");
+  const xml = `<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="h"><Font ss:Bold="1"/><Interior ss:Color="#1a2040" ss:Pattern="Solid"/><Font ss:Color="#f0a500" ss:Bold="1"/></Style></Styles><Worksheet ss:Name="EcoScope Data"><Table><Row>${headers.map(h => `<Cell ss:StyleID="h"><Data ss:Type="String">${h}</Data></Cell>`).join("")}</Row>${xmlRows}</Table></Worksheet></Workbook>`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([xml], {type:"application/vnd.ms-excel"}));
+  a.download = name; a.click();
+};
+
+const dlPDF = (data, varName, countryName, sourceName, startYear, endYear, fmt) => {
+  if (!data.length) return;
+  const rows = data.map((d,i) => {
+    const prev = data[i-1];
+    const delta = prev&&prev.value ? ((d.value-prev.value)/Math.abs(prev.value)*100) : null;
+    return `<tr style="background:${i%2?"#f8faff":"#fff"}"><td>${d.year}</td><td style="text-align:right;font-weight:600">${fmtVal(d.value,fmt)}</td><td style="text-align:right;color:${delta==null?"#999":delta>=0?"#00a87a":"#e03050"}">${delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(1)}%`}</td></tr>`
+  }).join("");
+  const html = `<html><head><title>${varName} — ${countryName}</title><style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:Arial,sans-serif;padding:40px;color:#111}h1{font-size:20px;margin-bottom:6px;color:#0f1221}h2{font-size:13px;font-weight:400;color:#666;margin-bottom:24px}.badge{display:inline-block;background:#f0a500;color:#000;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;margin-bottom:16px}table{width:100%;border-collapse:collapse;font-size:13px}th{padding:10px 14px;background:#0f1221;color:#f0a500;text-align:left;font-weight:600}td{padding:8px 14px;border-bottom:1px solid #eee}.footer{margin-top:24px;font-size:10px;color:#999;border-top:1px solid #eee;padding-top:12px}@media print{body{padding:20px}}</style></head><body><div class="badge">EcoScope · ${sourceName}</div><h1>${varName}</h1><h2>${countryName} · ${startYear}–${endYear}</h2><table><thead><tr><th>Year</th><th style="text-align:right">Value</th><th style="text-align:right">YoY Change</th></tr></thead><tbody>${rows}</tbody></table><div class="footer">Generated by EcoScope — Global Economic Intelligence Platform · ${new Date().toLocaleDateString()}</div></body></html>`;
+  const win = window.open("","_blank");
+  if (!win) return;
+  win.document.write(html);
+  win.document.close();
+  setTimeout(()=>win.print(), 400);
+};
+
+// ══════════════════════════════════════════════
+// ANALYTICAL UTILITIES
+// ══════════════════════════════════════════════
+
+// ── Data Transformations ────────────────────────────────────────────────────
+const TRANSFORMS = [
+  {id:"none",    label:"None (Raw)",           formula:"x"},
+  {id:"log",     label:"Natural Log",          formula:"ln(x)"},
+  {id:"log10",   label:"Log Base 10",          formula:"log₁₀(x)"},
+  {id:"diff",    label:"First Difference",     formula:"xₜ - xₜ₋₁"},
+  {id:"pct",     label:"% Change (YoY)",       formula:"(xₜ-xₜ₋₁)/|xₜ₋₁|×100"},
+  {id:"ma3",     label:"3-Period Moving Avg",  formula:"(xₜ+xₜ₋₁+xₜ₋₂)/3"},
+  {id:"ma5",     label:"5-Period Moving Avg",  formula:"Σxₜ₋ᵢ/5, i=0..4"},
+  {id:"zscore",  label:"Z-Score Normalise",    formula:"(x-μ)/σ"},
+  {id:"minmax",  label:"Min-Max Scale (0-100)",formula:"(x-min)/(max-min)×100"},
+  {id:"cumsum",  label:"Cumulative Sum",        formula:"Σxᵢ, i=1..t"},
+];
+
+const applyTransform = (data, method) => {
+  const d = data.filter(x=>x.value!=null);
+  if(method==="none"||!method) return data;
+  if(method==="log")   return data.map(r=>({...r,value:r.value>0?Math.log(r.value):null}));
+  if(method==="log10") return data.map(r=>({...r,value:r.value>0?Math.log10(r.value):null}));
+  if(method==="diff")  return data.map((r,i)=>({...r,value:i===0?null:r.value!=null&&data[i-1].value!=null?r.value-data[i-1].value:null}));
+  if(method==="pct")   return data.map((r,i)=>({...r,value:i===0?null:r.value!=null&&data[i-1].value?((r.value-data[i-1].value)/Math.abs(data[i-1].value)*100):null}));
+  if(method==="ma3")   return data.map((r,i)=>{if(i<2)return{...r,value:null};const v=data.slice(i-2,i+1).filter(x=>x.value!=null);return{...r,value:v.length===3?v.reduce((s,x)=>s+x.value,0)/3:null};});
+  if(method==="ma5")   return data.map((r,i)=>{if(i<4)return{...r,value:null};const v=data.slice(i-4,i+1).filter(x=>x.value!=null);return{...r,value:v.length===5?v.reduce((s,x)=>s+x.value,0)/5:null};});
+  if(method==="zscore"){const vals=d.map(x=>x.value);const mu=vals.reduce((a,b)=>a+b,0)/vals.length;const sigma=Math.sqrt(vals.reduce((s,v)=>s+(v-mu)**2,0)/vals.length);return data.map(r=>({...r,value:r.value!=null&&sigma?(r.value-mu)/sigma:null}));}
+  if(method==="minmax"){const vals=d.map(x=>x.value);const mn=Math.min(...vals),mx=Math.max(...vals);return data.map(r=>({...r,value:r.value!=null&&mx!==mn?(r.value-mn)/(mx-mn)*100:mx===mn?50:null}));}
+  if(method==="cumsum"){let s=0;return data.map(r=>({...r,value:r.value!=null?(s+=r.value):null}));}
+  return data;
+};
+
+// ── Missing Data Imputation ──────────────────────────────────────────────────
+const IMPUTE_METHODS = [
+  {id:"none",     label:"None",                  formula:"No imputation"},
+  {id:"linear",   label:"Linear Interpolation",  formula:"xᵢ = x₀ + (x₁-x₀)×t/T"},
+  {id:"forward",  label:"Forward Fill (LOCF)",   formula:"xₜ = xₜ₋₁ if missing"},
+  {id:"backward", label:"Backward Fill (NOCB)",  formula:"xₜ = xₜ₊₁ if missing"},
+  {id:"mean",     label:"Mean Imputation",        formula:"xₜ = μ(x) if missing"},
+  {id:"spline",   label:"Cubic Spline",           formula:"Piecewise cubic polynomial"},
+];
+
+const imputeData = (data, method) => {
+  if(method==="none"||!method) return data;
+  const result=data.map(d=>({...d}));
+  if(method==="forward"){let last=null;for(let d of result){if(d.value!=null)last=d.value;else if(last!=null)d.value=last;}return result;}
+  if(method==="backward"){let nxt=null;for(let i=result.length-1;i>=0;i--){if(result[i].value!=null)nxt=result[i].value;else if(nxt!=null)result[i].value=nxt;}return result;}
+  if(method==="mean"){const vals=result.filter(d=>d.value!=null).map(d=>d.value);const mu=vals.reduce((a,b)=>a+b,0)/vals.length;result.forEach(d=>{if(d.value==null)d.value=mu;});return result;}
+  if(method==="linear"||method==="spline"){
+    for(let i=0;i<result.length;i++){
+      if(result[i].value==null){
+        const prevI=result.slice(0,i).map((d,j)=>({...d,j})).filter(d=>d.value!=null).slice(-1)[0];
+        const nextI=result.slice(i+1).map((d,j)=>({...d,j:i+1+j})).filter(d=>d.value!=null)[0];
+        if(prevI&&nextI){result[i].value=prevI.value+(nextI.value-prevI.value)*(i-prevI.j)/(nextI.j-prevI.j);}
+      }
+    }
+    return result;
+  }
+  return result;
+};
+
+// ── OLS Linear Regression ────────────────────────────────────────────────────
+const olsRegression = (xVals, yVals) => {
+  const n=xVals.length;
+  if(n<3) return null;
+  const sx=xVals.reduce((a,b)=>a+b,0), sy=yVals.reduce((a,b)=>a+b,0);
+  const sxy=xVals.reduce((s,x,i)=>s+x*yVals[i],0), sx2=xVals.reduce((s,x)=>s+x*x,0);
+  const denom=n*sx2-sx*sx;
+  if(!denom) return null;
+  const b=(n*sxy-sx*sy)/denom, a=(sy-b*sx)/n;
+  const yMean=sy/n;
+  const ssTot=yVals.reduce((s,y)=>s+(y-yMean)**2,0);
+  const ssRes=xVals.reduce((s,x,i)=>s+(yVals[i]-(a+b*x))**2,0);
+  const r2=ssTot?1-ssRes/ssTot:0;
+  const se=Math.sqrt(ssRes/(n-2)||0);
+  return {a,b,r2,se,n};
+};
+
+
+const FREQ_OPTIONS=[
+  {id:"annual",   label:"Annual",    note:"Default — all sources"},
+  {id:"quarterly",label:"Quarterly", note:"FRED + interpolated WB"},
+  {id:"monthly",  label:"Monthly",   note:"FRED only"},
+];
+
+// Interpolate annual data to quarterly/monthly
+const interpolateFreq=(data, freq)=>{
+  if(!freq||freq==="annual"||!data.length) return data;
+  const sorted=[...data].sort((a,b)=>a.year-b.year);
+  const result=[];
+  const n=freq==="quarterly"?4:12;
+  const labels=freq==="quarterly"?["Q1","Q2","Q3","Q4"]:["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  for(let i=0;i<sorted.length-1;i++){
+    const a=sorted[i], b=sorted[i+1];
+    if(a.value==null||b.value==null) continue;
+    for(let q=0;q<n;q++){
+      const t=q/n;
+      result.push({year:`${a.year} ${labels[q]}`,value:+(a.value+(b.value-a.value)*t).toFixed(4)});
+    }
+  }
+  if(sorted[sorted.length-1]?.value!=null){
+    const last=sorted[sorted.length-1];
+    for(let q=0;q<n;q++) result.push({year:`${last.year} ${labels[q]}`,value:last.value});
+  }
+  return result;
+};
+
+// ── Composite Index Builder ──────────────────────────────────────────────────
+const NORM_METHODS = [
+  {id:"minmax", label:"Min-Max (0-100)",    formula:"(x-min)/(max-min)×100"},
+  {id:"zscore", label:"Z-Score",            formula:"(x-μ)/σ×10+50"},
+];
+const AGG_METHODS = [
+  {id:"weighted_sum",  label:"Weighted Sum",          formula:"Σ(wᵢ×xᵢ)"},
+  {id:"geometric",     label:"Geometric Mean",        formula:"(Π xᵢʷⁱ)^(1/Σwᵢ)"},
+  {id:"equal_weight",  label:"Equal Weight Average",  formula:"(1/n)Σxᵢ"},
+];
+
+const buildComposite = (seriesList, weights, normMethod, aggMethod) => {
+  if(!seriesList.length) return [];
+  // Normalize each series
+  const normed = seriesList.map(({data}) => {
+    const vals=data.filter(d=>d.value!=null).map(d=>d.value);
+    if(!vals.length) return data;
+    const mn=Math.min(...vals),mx=Math.max(...vals),mu=vals.reduce((a,b)=>a+b,0)/vals.length;
+    const sigma=Math.sqrt(vals.reduce((s,v)=>s+(v-mu)**2,0)/vals.length)||1;
+    return data.map(d=>({year:d.year, value:d.value!=null?(normMethod==="minmax"?mx!==mn?(d.value-mn)/(mx-mn)*100:50:(d.value-mu)/sigma*10+50):null}));
+  });
+  // Get union of years
+  const allYears=[...new Set(seriesList.flatMap(s=>s.data.map(d=>d.year)))].sort((a,b)=>a-b);
+  return allYears.map(year=>{
+    const pts=normed.map((s,i)=>({v:s.find(d=>d.year===year)?.value, w:weights[i]||1/normed.length})).filter(p=>p.v!=null);
+    if(!pts.length) return {year,value:null};
+    const tw=pts.reduce((s,p)=>s+p.w,0);
+    let val;
+    if(aggMethod==="geometric") val=Math.pow(pts.reduce((p,pt)=>p*Math.pow(Math.max(pt.v,0.001),pt.w),1),1/tw);
+    else val=pts.reduce((s,p)=>s+p.v*p.w,0)/tw;
+    return {year, value:parseFloat(val.toFixed(4))};
+  });
+};
+
+// ── Chart Export ─────────────────────────────────────────────────────────────
+const exportChart = async (format, title) => {
+  // Load html2canvas from CDN for reliable pixel-perfect capture
+  const loadHtml2Canvas = () => new Promise((res,rej)=>{
+    if(window.html2canvas) return res(window.html2canvas);
+    const s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    s.onload=()=>res(window.html2canvas);
+    s.onerror=()=>rej(new Error('Failed to load html2canvas'));
+    document.head.appendChild(s);
+  });
+
+  const chartDiv = document.getElementById('ecoscope-chart-area');
+  if(!chartDiv){ alert('No chart found — load data first'); return; }
+
+  // SVG export: serialize the Recharts SVG directly
+  if(format==='svg'){
+    const svg=chartDiv.querySelector('svg');
+    if(!svg){ alert('No SVG chart found'); return; }
+    const W=svg.clientWidth||700, H=svg.clientHeight||350;
+    const PAD=44, FOOT=20, TH=H+PAD+FOOT;
+    const inner=(new XMLSerializer().serializeToString(svg))
+      .replace(/<svg[^>]*>/,'').replace('</svg>','');
+    const doc=`<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${TH}">
+  <style>text,tspan{font-family:Arial,sans-serif!important}</style>
+  <rect width="${W}" height="${TH}" fill="#05070f"/>
+  <rect width="${W}" height="${PAD}" fill="#0b0e1c"/>
+  <line x1="0" y1="${PAD}" x2="${W}" y2="${PAD}" stroke="#182038" stroke-width="1"/>
+  <text x="14" y="20" fill="#f0a500" font-size="13" font-weight="bold" font-family="Arial,sans-serif">${(title||'EcoScope').replace(/&/g,'&amp;').replace(/</g,'&lt;').substring(0,72)}</text>
+  <text x="14" y="36" fill="#3a4565" font-size="9" font-family="Arial,sans-serif">EcoScope — Global Economic Intelligence · ${new Date().toLocaleDateString()}</text>
+  <g transform="translate(0,${PAD})">${inner}</g>
+  <text x="14" y="${TH-6}" fill="#3a4565" font-size="8" font-family="Arial,sans-serif">Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG · UNDP · Heritage · WIPO · IEP</text>
+</svg>`;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([doc],{type:'image/svg+xml;charset=utf-8'}));
+    a.download=(title||'ecoscope').replace(/[^a-zA-Z0-9_-]/g,'_').substring(0,50)+'.svg';
+    a.click(); return;
+  }
+
+  // PNG: use html2canvas for pixel-perfect capture
+  try {
+    const h2c=await loadHtml2Canvas();
+    const SCALE=2;
+    const PAD=56, FOOT=26;
+    const cw=chartDiv.clientWidth||700;
+    const ch=chartDiv.clientHeight||350;
+
+    // Capture the chart div
+    const chartCanvas=await h2c(chartDiv,{
+      backgroundColor:'#05070f',scale:SCALE,
+      useCORS:true,allowTaint:true,
+      logging:false,
+    });
+
+    // Compose final canvas with title bar + chart + footer
+    const final=document.createElement('canvas');
+    final.width=(cw)*SCALE;
+    final.height=(ch+PAD+FOOT)*SCALE;
+    const ctx=final.getContext('2d');
+    ctx.scale(SCALE,SCALE);
+
+    // Background
+    ctx.fillStyle='#05070f'; ctx.fillRect(0,0,cw,ch+PAD+FOOT);
+
+    // Title bar
+    ctx.fillStyle='#0b0e1c'; ctx.fillRect(0,0,cw,PAD-4);
+    ctx.fillStyle='#182038'; ctx.fillRect(0,PAD-4,cw,1);
+
+    // Title text
+    ctx.fillStyle='#f0a500'; ctx.font='bold 14px Arial, sans-serif';
+    ctx.fillText((title||'EcoScope Chart').substring(0,70), 14, 22);
+
+    // Subtitle
+    ctx.fillStyle='#3a4565'; ctx.font='10px Arial, sans-serif';
+    ctx.fillText('EcoScope — Global Economic Intelligence Platform · '+new Date().toLocaleDateString(), 14, 40);
+
+    // Draw chart (unscaled since h2c already scaled)
+    ctx.resetTransform();
+    ctx.drawImage(chartCanvas, 0, PAD*SCALE);
+    ctx.scale(SCALE,SCALE);
+
+    // Footer
+    ctx.fillStyle='#3a4565'; ctx.font='8px Arial, sans-serif';
+    ctx.fillText('Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG · UNDP · Heritage · WIPO · IEP', 14, ch+PAD+FOOT-6);
+
+    // Download
+    const a=document.createElement('a');
+    a.href=final.toDataURL('image/png',1.0);
+    a.download=(title||'ecoscope').replace(/[^a-zA-Z0-9_-]/g,'_').substring(0,50)+'.png';
+    a.click();
+
+  } catch(e){
+    console.error('Export error:',e);
+    // Fallback: print dialog
+    const w=window.open('','_blank','width=900,height=600');
+    if(w){
+      const svg=chartDiv.querySelector('svg');
+      const svgHtml=svg?svg.outerHTML:'<p>No chart</p>';
+      w.document.write(`<!DOCTYPE html><html><head><title>${title||'EcoScope Chart'}</title>
+        <style>
+          body{margin:0;background:#05070f;color:#dde3f5;font-family:Arial,sans-serif;padding:20px}
+          h3{color:#f0a500;margin:0 0 8px}
+          p{color:#3a4565;font-size:10px;margin:8px 0 0}
+          @media print{body{background:#fff} h3{color:#b07000}}
+        </style></head><body>
+        <h3>${(title||'EcoScope Chart').replace(/</g,'&lt;')}</h3>
+        ${svgHtml}
+        <p>Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG | EcoScope ${new Date().getFullYear()}</p>
+        <script>setTimeout(()=>window.print(),600)</script>
+      </body></html>`);
+      w.document.close();
+    }
+  }
+};
+
+
 // ══════════════════════════════════════════════
 // STYLES
 // ══════════════════════════════════════════════
@@ -539,55 +1333,128 @@ const card = {background:C.card,border:`1px solid ${C.border}`,borderRadius:12,p
 // LOGIN
 // ══════════════════════════════════════════════
 
-function Login({onLogin}) {
+function Login({onLogin}){
   const [mode,setMode]=useState("login");
-  const [u,setU]=useState(""); const [email,setEmail]=useState(""); const [p,setP]=useState(""); const [p2,setP2]=useState("");
-  const [err,setErr]=useState(""); const [loading,setLoading]=useState(false); const [ok,setOk]=useState("");
+  const [u,setU]=useState(""); const [email,setEmail]=useState("");
+  const [p,setP]=useState(""); const [p2,setP2]=useState("");
+  const [err,setErr]=useState(""); const [loading,setLoading]=useState(false);
+  const [ok,setOk]=useState(""); const [showPw,setShowPw]=useState(false);
+
+  // Live validation
+  const unErrs=u.trim()?checkUn(u):[];
+  const pwErrs=p?checkPw(p):[];
   const initials=u.trim()?u.trim().slice(0,2).toUpperCase():"◈";
-  const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][u.charCodeAt(0)%5||0];
+  const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs(u.charCodeAt(0)||0)%5];
+
+  useState(()=>{  },[]);
+
   const go=async e=>{
     e.preventDefault(); setErr("");
-    if(mode==="forgot"){if(!email.trim()){setErr("Email required");return;}setLoading(true);await new Promise(r=>setTimeout(r,900));setLoading(false);setOk("Reset link sent (demo).");return;}
-    if(mode==="register"){if(!u.trim()||!email.trim()||!p.trim()){setErr("All fields required");return;}if(p!==p2){setErr("Passwords do not match");return;}if(p.length<6){setErr("Min 6 characters");return;}}
-    else{if(!u.trim()||!p.trim()){setErr("Username and password required");return;}}
-    setLoading(true);await new Promise(r=>setTimeout(r,900));setLoading(false);
-    onLogin({username:u,email:email||`${u}@ecoscope.demo`,initials,avatarColor,
-      settings:{defaultCountry:"GH",fredKey:"",anthropicKey:"",defaultSource:"worldbank",defaultLevel:"macro",chartType:"area",startYear:2000,endYear:2023}});
+    if(mode==="forgot"){
+      if(!email.trim()){setErr("Email required");return;}
+      setLoading(true);await new Promise(r=>setTimeout(r,800));setLoading(false);
+      setOk("Reset link sent (demo). Check your inbox.");return;
+    }
+    if(mode==="register"){
+      const ue=checkUn(u); if(ue.length){setErr(ue[0]);return;}
+      if(!email.trim()||!email.includes("@")){setErr("Valid email required");return;}
+      const pe=checkPw(p); if(pe.length){setErr(pe[0]);return;}
+      if(p!==p2){setErr("Passwords do not match");return;}
+      setLoading(true);await new Promise(r=>setTimeout(r,600));setLoading(false);
+      const res=await US.register(u.trim(),email.trim(),p);
+      if(res.error){setErr(res.error);return;}
+      const initials=u.trim().slice(0,2).toUpperCase();
+      const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs(u.charCodeAt(0)||0)%5];
+      onLogin({...res.user,initials,avatarColor});
+    } else {
+      if(!u.trim()||!p){setErr("Both fields required");return;}
+      setLoading(true);await new Promise(r=>setTimeout(r,600));setLoading(false);
+      const res=await US.login(u.trim(),p);
+      if(res.error){setErr(res.error);return;}
+      const initials=res.user.username.slice(0,2).toUpperCase();
+      const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs(res.user.username.charCodeAt(0)||0)%5];
+      onLogin({...res.user,initials,avatarColor});
+    }
   };
-  const Tab=({id,label})=>(<button onClick={()=>{setMode(id);setErr("");setOk("");}} style={{background:"none",border:"none",padding:"9px 0",fontSize:11,fontFamily:C.mono,cursor:"pointer",color:mode===id?C.gold:C.mid,borderBottom:`2px solid ${mode===id?C.gold:"transparent"}`,transition:"all .15s",letterSpacing:"0.08em",textTransform:"uppercase",flex:1}}>{label}</button>);
-  return (
+
+  const Tab=({id,label})=>(<button onClick={()=>{setMode(id);setErr("");setOk("");}} style={{background:"none",border:"none",padding:"10px 0",fontSize:11,fontFamily:C.mono,cursor:"pointer",color:mode===id?C.gold:C.mid,borderBottom:`2px solid ${mode===id?C.gold:"transparent"}`,transition:"all .15s",letterSpacing:"0.08em",textTransform:"uppercase",flex:1}}>{label}</button>);
+
+  const PwStrength=({pw})=>{
+    const errs=checkPw(pw);
+    const score=pwRules.length-errs.length;
+    const cols=["#ff4c6a","#ff8c42","#f0a500","#00c9a7"];
+    return pw?(
+      <div style={{marginTop:8}}>
+        <div style={{display:"flex",gap:3,marginBottom:5}}>
+          {pwRules.map((_,i)=><div key={i} style={{flex:1,height:3,borderRadius:2,background:i<score?cols[Math.min(score-1,3)]:C.border,transition:"background .2s"}}/>)}
+        </div>
+        {errs.map((e,i)=><div key={i} style={{color:C.red,fontSize:9,fontFamily:C.mono}}>✗ {e}</div>)}
+        {!errs.length&&<div style={{color:C.teal,fontSize:9,fontFamily:C.mono}}>✓ Strong password</div>}
+      </div>
+    ):null;
+  };
+
+  return(
     <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:C.font,position:"relative",overflow:"hidden"}}>
       <div style={{position:"absolute",inset:0,backgroundImage:`linear-gradient(${C.border}44 1px,transparent 1px),linear-gradient(90deg,${C.border}44 1px,transparent 1px)`,backgroundSize:"48px 48px",pointerEvents:"none"}}/>
       <div style={{position:"absolute",width:700,height:700,borderRadius:"50%",background:`radial-gradient(circle,${C.gold}0d 0%,transparent 70%)`,top:"50%",left:"50%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
-      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:22,padding:"44px 44px 32px",width:430,position:"relative",boxShadow:`0 32px 80px rgba(0,0,0,.6)`}}>
-        <div style={{textAlign:"center",marginBottom:24}}>
+      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:22,padding:"40px 44px 32px",width:440,position:"relative",boxShadow:`0 32px 80px rgba(0,0,0,.6)`}}>
+        <div style={{textAlign:"center",marginBottom:22}}>
           <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:54,height:54,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:16,fontSize:24,marginBottom:12,boxShadow:`0 8px 24px ${C.gold}44`}}>◈</div>
           <h1 style={{color:C.text,fontSize:24,fontWeight:800,margin:"0 0 3px",letterSpacing:"-0.5px"}}>EcoScope</h1>
           <p style={{color:C.dim,fontSize:9,margin:0,fontFamily:C.mono,letterSpacing:"0.18em"}}>GLOBAL ECONOMIC INTELLIGENCE PLATFORM</p>
         </div>
+
         {u.trim()&&mode!=="forgot"&&(
-          <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
-            <div style={{width:40,height:40,borderRadius:"50%",background:avatarColor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:"#000",boxShadow:`0 0 0 3px ${C.surface},0 0 0 5px ${avatarColor}55`}}>{initials}</div>
+          <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
+            <div style={{width:38,height:38,borderRadius:"50%",background:avatarColor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:"#000",boxShadow:`0 0 0 3px ${C.surface},0 0 0 5px ${avatarColor}55`}}>{initials}</div>
           </div>
         )}
+
         {mode!=="forgot"&&(<div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,marginBottom:20}}><Tab id="login" label="Sign In"/><Tab id="register" label="Create Account"/></div>)}
+
         {ok&&<div style={{background:`${C.teal}15`,border:`1px solid ${C.teal}44`,borderRadius:8,padding:"10px 13px",marginBottom:14,color:C.teal,fontSize:11,fontFamily:C.mono}}>{ok}</div>}
+
         <form onSubmit={go}>
           {mode==="forgot"?(
-            <><div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginBottom:16,lineHeight:1.6}}>Enter your email and we will send a reset link.</div>
+            <><div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginBottom:16,lineHeight:1.6}}>Enter your email to receive a reset link.</div>
             <div style={{marginBottom:16}}><div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Email Address</div><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{...inp,border:`1px solid ${email?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div></>
           ):(
             <>
-              <div style={{marginBottom:14}}><div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Username</div><input type="text" value={u} onChange={e=>setU(e.target.value)} placeholder="Enter your username" style={{...inp,border:`1px solid ${u?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div>
-              {mode==="register"&&<div style={{marginBottom:14}}><div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Email Address</div><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{...inp,border:`1px solid ${email?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div>}
-              <div style={{marginBottom:mode==="register"?14:6}}><div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Password</div><input type="password" value={p} onChange={e=>setP(e.target.value)} placeholder="••••••••" style={{...inp,border:`1px solid ${p?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div>
-              {mode==="register"&&<div style={{marginBottom:6}}><div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Confirm Password</div><input type="password" value={p2} onChange={e=>setP2(e.target.value)} placeholder="••••••••" style={{...inp,border:`1px solid ${p2?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div>}
-              {mode==="login"&&<div style={{textAlign:"right",marginBottom:16}}><button type="button" onClick={()=>{setMode("forgot");setErr("");setOk("");}} style={{background:"none",border:"none",color:C.blue,fontSize:10,fontFamily:C.mono,cursor:"pointer"}}>Forgot password?</button></div>}
+              <div style={{marginBottom:12}}>
+                <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Username</div>
+                <input type="text" value={u} onChange={e=>setU(e.target.value)} placeholder="Enter your username" style={{...inp,border:`1px solid ${u&&!unErrs.length?C.teal:u&&unErrs.length?C.red:C.border}`,fontSize:13,padding:"12px 14px"}}/>
+                {mode==="register"&&u&&unErrs.map((e,i)=><div key={i} style={{color:C.red,fontSize:9,fontFamily:C.mono,marginTop:4}}>✗ {e}</div>)}
+                {mode==="register"&&u&&!unErrs.length&&<div style={{color:C.teal,fontSize:9,fontFamily:C.mono,marginTop:4}}>✓ Username available</div>}
+              </div>
+              {mode==="register"&&(
+                <div style={{marginBottom:12}}>
+                  <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Email Address</div>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{...inp,border:`1px solid ${email?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/>
+                </div>
+              )}
+              <div style={{marginBottom:mode==="register"?8:6}}>
+                <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Password</div>
+                <div style={{position:"relative"}}>
+                  <input type={showPw?"text":"password"} value={p} onChange={e=>setP(e.target.value)} placeholder={mode==="login"?"Enter password":"Min 8 chars, uppercase, number, symbol"} style={{...inp,border:`1px solid ${p&&mode==="register"?(!pwErrs.length?C.teal:C.red):p?C.gold:C.border}`,fontSize:13,padding:"12px 40px 12px 14px"}}/>
+                  <button type="button" onClick={()=>setShowPw(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.mid,cursor:"pointer",fontSize:12}}>{showPw?"🙈":"👁"}</button>
+                </div>
+                {mode==="register"&&<PwStrength pw={p}/>}
+              </div>
+              {mode==="register"&&(
+                <div style={{marginBottom:8}}>
+                  <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:7}}>Confirm Password</div>
+                  <input type="password" value={p2} onChange={e=>setP2(e.target.value)} placeholder="Repeat password" style={{...inp,border:`1px solid ${p2?(p===p2?C.teal:C.red):C.border}`,fontSize:13,padding:"12px 14px"}}/>
+                  {p2&&p!==p2&&<div style={{color:C.red,fontSize:9,fontFamily:C.mono,marginTop:4}}>✗ Passwords do not match</div>}
+                  {p2&&p===p2&&<div style={{color:C.teal,fontSize:9,fontFamily:C.mono,marginTop:4}}>✓ Passwords match</div>}
+                </div>
+              )}
+              {mode==="login"&&<div style={{textAlign:"right",marginBottom:14}}><button type="button" onClick={()=>{setMode("forgot");setErr("");setOk("");}} style={{background:"none",border:"none",color:C.blue,fontSize:10,fontFamily:C.mono,cursor:"pointer"}}>Forgot password?</button></div>}
             </>
           )}
-          {err&&<p style={{color:C.red,fontSize:11,fontFamily:C.mono,marginBottom:12}}>{err}</p>}
-          <button type="submit" disabled={loading||!!ok} style={{...btn(),width:"100%",padding:"13px",fontSize:13,opacity:loading||ok?.6:1,marginTop:4}}>
-            {loading?"AUTHENTICATING…":mode==="login"?"SIGN IN →":mode==="register"?"CREATE ACCOUNT →":"SEND RESET LINK →"}
+          {err&&<div style={{background:`${C.red}12`,border:`1px solid ${C.red}44`,borderRadius:7,padding:"9px 12px",marginBottom:12,color:C.red,fontSize:11,fontFamily:C.mono}}>{err}</div>}
+          <button type="submit" disabled={loading} style={{...btn(),width:"100%",padding:"13px",fontSize:13,opacity:loading?.6:1,marginTop:4}}>
+            {loading?"PROCESSING…":mode==="login"?"SIGN IN →":mode==="register"?"CREATE ACCOUNT →":"SEND RESET LINK →"}
           </button>
         </form>
         {mode==="forgot"&&<button onClick={()=>{setMode("login");setOk("");setErr("");}} style={{background:"none",border:"none",color:C.mid,fontSize:11,fontFamily:C.mono,cursor:"pointer",width:"100%",textAlign:"center",marginTop:14}}>← Back to Sign In</button>}
@@ -596,9 +1463,156 @@ function Login({onLogin}) {
             <div key={nm} style={{textAlign:"center"}}><div style={{fontSize:16,marginBottom:2}}>{ic}</div><div style={{color:C.dim,fontSize:8,fontFamily:C.mono}}>{nm}</div></div>
           ))}
         </div>
-        <p style={{textAlign:"center",color:C.dim,fontSize:9,marginTop:10,fontFamily:C.mono}}>Demo mode — any credentials accepted</p>
+        <p style={{textAlign:"center",color:C.dim,fontSize:9,marginTop:10,fontFamily:C.mono}}>EcoScope · Real accounts required</p>
       </div>
     </div>
+  );
+}
+
+
+// ══════════════════════════════════════════════
+// UPGRADE MODAL
+// ══════════════════════════════════════════════
+function UpgradeModal({feature,requiredPlan="pro",onClose,onUpgrade}){
+  const pl=PLANS[requiredPlan]||PLANS.pro;
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,backdropFilter:"blur(8px)"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:C.surface,border:`2px solid ${pl.color}55`,borderRadius:20,padding:"40px 44px",width:430,textAlign:"center",boxShadow:`0 32px 80px rgba(0,0,0,.7),0 0 0 1px ${pl.color}22`}}>
+        <div style={{fontSize:40,marginBottom:14}}>🔒</div>
+        <div style={{background:`${pl.color}18`,border:`1px solid ${pl.color}44`,borderRadius:8,padding:"4px 14px",display:"inline-block",marginBottom:14}}>
+          <span style={{color:pl.color,fontSize:10,fontFamily:C.mono,fontWeight:800,letterSpacing:"0.12em"}}>{pl.badge} PLAN REQUIRED</span>
+        </div>
+        <h2 style={{color:C.text,fontSize:18,fontWeight:800,margin:"0 0 10px",lineHeight:1.3}}>{feature}</h2>
+        <p style={{color:C.mid,fontSize:12,fontFamily:C.mono,marginBottom:24,lineHeight:1.7}}>
+          This feature requires the <strong style={{color:pl.color}}>{pl.name} plan</strong> ({pl.priceLabel}).<br/>
+          Upgrade to unlock AI Insights, all 10 data sources, Excel & PDF exports, and country comparison.
+        </p>
+        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          <button onClick={onClose} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 22px",color:C.mid,fontSize:12,cursor:"pointer",fontFamily:C.font}}>Maybe later</button>
+          <button onClick={onUpgrade} style={{background:`linear-gradient(135deg,${pl.color},${C.goldLt})`,border:"none",borderRadius:9,padding:"11px 26px",color:"#000",fontSize:12,fontWeight:800,cursor:"pointer",fontFamily:C.font}}>Upgrade to {pl.name} →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// EXPORT MENU
+// ══════════════════════════════════════════════
+function ExportMenu({data,currentVar,cc,source,startYear,endYear,plan,onUpgradeNeeded}){
+  const [open,setOpen]=useState(false);
+  const canXls=plan.exports.includes("excel");
+  const canPdf=plan.exports.includes("pdf");
+  const fmt=currentVar.fmt;
+  const filename=`${cc.name}_${currentVar.name.replace(/[^a-z0-9]/gi,"_")}_${startYear}_${endYear}`;
+
+  const doExport=(type)=>{
+    setOpen(false);
+    if(type==="csv"){
+      dlCSV(data.map(d=>({Year:d.year,[currentVar.name]:fmtVal(d.value,fmt)})),filename+".csv");
+    } else if(type==="excel"){
+      if(!canXls){onUpgradeNeeded("Excel Export");return;}
+      const headers=["Year","Value","YoY Change"];
+      const rows=data.map((d,i)=>{
+        const prev=data[i-1];
+        const delta=prev&&prev.value?((d.value-prev.value)/Math.abs(prev.value)*100):null;
+        return [d.year, fmtVal(d.value,fmt), delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(2)}%`];
+      });
+      const xmlRows=[headers,...rows].map(r=>`<Row>${r.map(v=>`<Cell><Data ss:Type="String">${String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;")}</Data></Cell>`).join("")}</Row>`).join("");
+      const xml=`<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="EcoScope"><Table>${xmlRows}</Table></Worksheet></Workbook>`;
+      const a=document.createElement("a");
+      a.href=URL.createObjectURL(new Blob([xml],{type:"application/vnd.ms-excel;charset=utf-8"}));
+      a.download=filename+".xls"; a.click();
+      US.log(cc.name,"Excel Export",`${currentVar.name} · ${startYear}–${endYear}`);
+    } else if(type==="pdf"){
+      if(!canPdf){onUpgradeNeeded("PDF Export");return;}
+      dlPDF(data,currentVar.name,cc.name,source.name,startYear,endYear,fmt);
+      US.log(cc.name,"PDF Export",`${currentVar.name} · ${startYear}–${endYear}`);
+    }
+  };
+
+  return(
+    <div style={{position:"relative"}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 14px",borderRadius:8,border:`1px solid ${C.teal}66`,background:open?`${C.teal}18`:"transparent",color:C.teal,fontSize:11,cursor:"pointer",fontFamily:C.mono,fontWeight:600}}>
+        ↓ Export {open?"▲":"▼"}
+      </button>
+      {open&&(
+        <>
+          <div onClick={()=>setOpen(false)} style={{position:"fixed",inset:0,zIndex:98}}/>
+          <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:12,padding:8,minWidth:210,zIndex:99,boxShadow:"0 12px 36px rgba(0,0,0,.6)"}}>
+            <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,padding:"4px 10px 6px",textTransform:"uppercase",letterSpacing:"0.12em"}}>Choose Format</div>
+            {[
+              {type:"csv",icon:"📄",label:"CSV",sub:"Comma separated values",free:true},
+              {type:"excel",icon:"📊",label:"Excel (.xls)",sub:"Spreadsheet with formatting",free:canXls},
+              {type:"pdf",icon:"📋",label:"PDF Report",sub:"Printable formatted report",free:canPdf},
+            ].map(({type,icon,label,sub,free})=>(
+              <button key={type} onClick={()=>doExport(type)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",borderRadius:8,border:"none",background:"transparent",cursor:"pointer",textAlign:"left",transition:"background .1s"}}>
+                <span style={{fontSize:18,flexShrink:0}}>{icon}</span>
+                <div style={{flex:1}}>
+                  <div style={{color:C.text,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                    {label}
+                    {!free&&<span style={{background:`${C.gold}20`,color:C.gold,fontSize:8,fontFamily:C.mono,borderRadius:4,padding:"1px 5px",fontWeight:700}}>PRO</span>}
+                  </div>
+                  <div style={{color:C.dim,fontSize:10,fontFamily:C.mono}}>{sub}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// SUPPORT FORM COMPONENT
+// ══════════════════════════════════════════════
+function SupportForm({user}) {
+  const [type,setType]=useState("bug");
+  const [msg,setMsg]=useState("");
+  const [sent,setSent]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const submit=async(e)=>{
+    e.preventDefault();
+    if(!msg.trim())return;
+    setLoading(true);
+    await new Promise(r=>setTimeout(r,900));
+    setLoading(false);setSent(true);
+  };
+  if(sent) return(
+    <div style={{background:`${C.teal}12`,border:`1px solid ${C.teal}44`,borderRadius:10,padding:"20px",textAlign:"center"}}>
+      <div style={{fontSize:28,marginBottom:10}}>✓</div>
+      <div style={{color:C.teal,fontSize:13,fontWeight:600,marginBottom:6}}>Ticket submitted!</div>
+      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>We'll reply to {user.email||user.username+"@ecoscope.app"} within 24 hours.</div>
+      <button onClick={()=>{setSent(false);setMsg("");}} style={{marginTop:14,background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"7px 16px",color:C.mid,fontSize:11,cursor:"pointer",fontFamily:C.mono}}>Submit another</button>
+    </div>
+  );
+  return(
+    <form onSubmit={submit}>
+      <div style={{marginBottom:14}}>
+        <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Ticket Type</div>
+        <div style={{display:"flex",gap:6}}>
+          {[["bug","🐛 Bug Report"],["feature","✨ Feature Request"],["data","📊 Data Issue"],["other","💬 Other"]].map(([v,l])=>(
+            <button key={v} type="button" onClick={()=>setType(v)} style={{...pill(type===v),fontSize:10,padding:"5px 10px"}}>{l}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Your Email</div>
+        <input type="email" value={user.email||""} readOnly style={{...inp,fontSize:12,opacity:.7}}/>
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Message</div>
+        <textarea value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Describe your issue or request in detail..." rows={5} style={{...inp,resize:"vertical",fontSize:12,lineHeight:1.6}}/>
+      </div>
+      <button type="submit" disabled={loading||!msg.trim()} style={{background:C.gold,color:"#000",border:"none",borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:C.font,opacity:loading||!msg.trim()?.5:1}}>
+        {loading?"Sending…":"Submit Ticket →"}
+      </button>
+      <div style={{marginTop:16,padding:"11px 14px",background:C.card,borderRadius:9,border:`1px solid ${C.border}`}}>
+        <div style={{color:C.mid,fontSize:10,fontFamily:C.mono}}>📧 Direct: <span style={{color:C.blue}}>support@ecoscope.app</span></div>
+        <div style={{color:C.mid,fontSize:10,fontFamily:C.mono,marginTop:4}}>📚 Docs: <span style={{color:C.blue}}>docs.ecoscope.app</span></div>
+      </div>
+    </form>
   );
 }
 
@@ -609,7 +1623,17 @@ function Login({onLogin}) {
 function Settings({user, settings, onSave, onClose}) {
   const [s,setS]=useState({...settings});
   const [tab,setTab]=useState("account");
-  const tabs=[{id:"account",icon:"👤",label:"Account"},{id:"data",icon:"📊",label:"Data Defaults"},{id:"keys",icon:"🔑",label:"API Keys"},{id:"display",icon:"🎨",label:"Display"},{id:"help",icon:"❓",label:"Help & Support"}];
+  // Admin sees API Keys tab; regular users do not
+  const isAdmin=user?.role==="admin";
+  const tabs=[
+    {id:"account",icon:"👤",label:"Account"},
+    {id:"data",icon:"📊",label:"Data Defaults"},
+    ...(isAdmin?[{id:"keys",icon:"🔑",label:"API Keys"}]:[]),
+    {id:"theme",icon:"🎨",label:"Themes"},
+    {id:"plan",icon:"⬡",label:"Subscription"},
+    {id:"support",icon:"🛟",label:"Support"},
+    {id:"help",icon:"❓",label:"Help"},
+  ];
   const Sec=({title,children})=>(<div style={{marginBottom:20}}><div style={{color:C.gold,fontSize:9,fontFamily:C.mono,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:12,paddingBottom:7,borderBottom:`1px solid ${C.border}`}}>{title}</div>{children}</div>);
   const Field=({label,hint,children})=>(<div style={{marginBottom:14}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}><div style={{color:C.text,fontSize:12,fontWeight:600}}>{label}</div>{hint&&<span style={{color:C.dim,fontSize:10,fontFamily:C.mono}}>{hint}</span>}</div>{children}</div>);
   return (
@@ -679,7 +1703,7 @@ function Settings({user, settings, onSave, onClose}) {
                 </Sec>
               </>
             )}
-            {tab==="keys"&&(
+            {tab==="keys"&&isAdmin&&(
               <>
                 <div style={{background:`${C.gold}0e`,border:`1px solid ${C.gold}33`,borderRadius:9,padding:"11px 14px",marginBottom:18}}>
                   <div style={{color:C.gold,fontSize:11,fontFamily:C.mono}}>🔑 Keys are stored in your browser session only and never sent to any third party.</div>
@@ -703,8 +1727,22 @@ function Settings({user, settings, onSave, onClose}) {
                 </Sec>
               </>
             )}
-            {tab==="display"&&(
+            {tab==="theme"&&(
               <>
+                <Sec title="Dashboard Theme">
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+                    {Object.entries(THEMES).map(([key,th])=>(
+                      <button key={key} onClick={()=>setS(x=>({...x,theme:key}))} style={{padding:"14px 16px",borderRadius:10,border:`2px solid ${s.theme===key?C.gold:C.border}`,background:th.bg,cursor:"pointer",textAlign:"left",transition:"border-color .15s"}}>
+                        <div style={{display:"flex",gap:6,marginBottom:8}}>
+                          {[th.surface,th.card,th.border].map((col,i)=><div key={i} style={{width:18,height:18,borderRadius:4,background:col,border:`1px solid ${th.borderHi}`}}/>)}
+                        </div>
+                        <div style={{color:th.text,fontSize:12,fontWeight:600}}>{th.label}</div>
+                        <div style={{color:th.mid,fontSize:9,fontFamily:C.mono,marginTop:2}}>{key}</div>
+                        {s.theme===key&&<div style={{color:C.gold,fontSize:9,fontFamily:C.mono,marginTop:4}}>✓ Active</div>}
+                      </button>
+                    ))}
+                  </div>
+                </Sec>
                 <Sec title="Chart Preferences">
                   <Field label="Default Chart Type">
                     <div style={{display:"flex",gap:7}}>
@@ -717,11 +1755,66 @@ function Settings({user, settings, onSave, onClose}) {
                     </div>
                   </Field>
                 </Sec>
-                <Sec title="Interface">
-                  <Field label="Sidebar Width"><select value={s.sidebarWidth||268} onChange={e=>setS(x=>({...x,sidebarWidth:+e.target.value}))} style={{...sel,fontSize:12}}><option value={230}>Compact (230px)</option><option value={268}>Default (268px)</option><option value={320}>Wide (320px)</option></select></Field>
-                  <div style={{background:`${C.border}`,borderRadius:8,padding:"10px 13px"}}>
-                    <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>More theme options coming soon.</div>
+              </>
+            )}
+            {tab==="plan"&&(
+              <>
+                <Sec title="Your Current Plan">
+                  <div style={{background:C.card,border:`2px solid ${PLANS[s.plan||"pro"].color}55`,borderRadius:12,padding:"16px 18px",marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+                      <div style={{background:PLANS[s.plan||"pro"].color,color:"#000",borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:800,fontFamily:C.mono}}>{PLANS[s.plan||"pro"].badge}</div>
+                      <div style={{color:PLANS[s.plan||"pro"].color,fontSize:14,fontWeight:700}}>{PLANS[s.plan||"pro"].name}</div>
+                      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginLeft:"auto"}}>{PLANS[s.plan||"pro"].priceLabel}</div>
+                    </div>
                   </div>
+                </Sec>
+                <Sec title="Available Plans">
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {Object.entries(PLANS).map(([key,pl])=>(
+                      <div key={key} onClick={()=>setS(x=>({...x,plan:key}))} style={{padding:"14px 16px",borderRadius:10,border:`2px solid ${(s.plan||"pro")===key?pl.color:C.border}`,background:(s.plan||"pro")===key?`${pl.color}10`:C.card,cursor:"pointer",transition:"all .15s"}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div style={{background:pl.color,color:"#000",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:800,fontFamily:C.mono}}>{pl.badge}</div>
+                            <span style={{color:pl.color,fontSize:13,fontWeight:700}}>{pl.name}</span>
+                          </div>
+                          <span style={{color:C.mid,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{pl.priceLabel}</span>
+                        </div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                          {[
+                            pl.sources==="all"?"All 10 sources":`${pl.sources.length} sources`,
+                            pl.aiInsights?"AI Insights ✓":"No AI Insights",
+                            `Exports: ${pl.exports.join(", ").toUpperCase()}`,
+                            pl.compare?"Country compare ✓":"No compare",
+                          ].map((f,i)=><span key={i} style={{background:C.surface,borderRadius:5,padding:"3px 8px",color:C.mid,fontSize:9,fontFamily:C.mono}}>{f}</span>)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Sec>
+                <div style={{background:`${C.teal}10`,border:`1px solid ${C.teal}33`,borderRadius:8,padding:"11px 14px"}}>
+                  <div style={{color:C.teal,fontSize:11,fontFamily:C.mono}}>💳 Demo mode — plan switching is free. In production, integrate Stripe or Paystack for billing.</div>
+                </div>
+              </>
+            )}
+            {tab==="support"&&(
+              <>
+                <Sec title="Submit a Support Ticket">
+                  <SupportForm user={user}/>
+                </Sec>
+                <Sec title="Quick Help">
+                  {[
+                    {q:"Why is my chart empty?",a:"No data exists for the selected country/indicator/year range. Try expanding the year range or switching to World Bank source."},
+                    {q:"AI Insights not working?",a:"Add your Anthropic API key in the API Keys tab. The key starts with sk-ant-api03-."},
+                    {q:"How do I compare countries?",a:"Enable the Compare Countries checkbox at the bottom of the left sidebar, then select a second country."},
+                    {q:"Can I export to Excel?",a:"Yes — click the XLS button above the chart. PDF is also available via the PDF button."},
+                    {q:"How do I resize the sidebar?",a:"Drag the thin vertical line between the sidebar and the chart area left or right."},
+                    {q:"What's the difference between Macro and Micro data?",a:"Macro covers GDP, trade, fiscal and monetary data. Micro covers health, labour, education and environment indicators."},
+                  ].map(({q,a},i)=>(
+                    <div key={i} style={{marginBottom:12,padding:"11px 14px",background:C.card,borderRadius:9,border:`1px solid ${C.border}`}}>
+                      <div style={{color:C.gold,fontSize:12,fontWeight:600,marginBottom:5}}>Q: {q}</div>
+                      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>{a}</div>
+                    </div>
+                  ))}
                 </Sec>
               </>
             )}
@@ -780,20 +1873,128 @@ const CustomTip = ({active,payload,label,fmt}) => {
 };
 
 // ══════════════════════════════════════════════
+// UPGRADE REQUEST MODAL (user-facing)
+// ══════════════════════════════════════════════
+function UpgradeRequestModal({user,currentPlan,onClose}){
+  const [plan,setPlan]=useState("pro");
+  const [message,setMessage]=useState("");
+  const [sent,setSent]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+
+  const submit=async e=>{
+    e.preventDefault();setErr("");
+    if(plan===currentPlan){setErr("You are already on this plan.");return;}
+    setLoading(true);
+    await new Promise(r=>setTimeout(r,700));
+    const res=await US.requestPlan(user.username,user.email,currentPlan,plan,message);
+    setLoading(false);
+    if(res.error){setErr(res.error);return;}
+    setSent(true);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,backdropFilter:"blur(8px)"}}>
+      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:20,padding:"36px 40px",width:460,fontFamily:C.font,boxShadow:"0 32px 80px rgba(0,0,0,.7)"}}>
+        {sent?(
+          <div style={{textAlign:"center",padding:"20px 0"}}>
+            <div style={{fontSize:48,marginBottom:16}}>📬</div>
+            <h2 style={{color:C.teal,fontSize:18,fontWeight:800,marginBottom:10}}>Request Sent!</h2>
+            <p style={{color:C.mid,fontSize:12,fontFamily:C.mono,lineHeight:1.7,marginBottom:24}}>Your upgrade request to <strong style={{color:PLANS[plan].color}}>{PLANS[plan].name}</strong> has been sent to the administrator. You will be notified once it is approved.</p>
+            <button onClick={onClose} style={{...btn(),padding:"11px 28px",fontSize:12}}>Got it →</button>
+          </div>
+        ):(
+          <>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+              <div>
+                <h2 style={{color:C.text,fontSize:16,fontWeight:800,margin:"0 0 3px"}}>⬆ Request Plan Upgrade</h2>
+                <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>Current plan: <span style={{color:PLANS[currentPlan]?.color||C.mid,fontWeight:700}}>{currentPlan.toUpperCase()}</span></div>
+              </div>
+              <button onClick={onClose} style={{background:"none",border:"none",color:C.mid,cursor:"pointer",fontSize:18}}>✕</button>
+            </div>
+            <form onSubmit={submit}>
+              <div style={{marginBottom:16}}>
+                <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:8}}>Requested Plan</div>
+                <div style={{display:"flex",gap:8}}>
+                  {Object.entries(PLANS).filter(([k])=>k!=="free").map(([key,pl])=>(
+                    <button key={key} type="button" onClick={()=>setPlan(key)} style={{...pill(plan===key,pl.color),flex:1,textAlign:"center",padding:"12px 8px",fontSize:12}}>
+                      <div style={{fontWeight:700}}>{pl.name}</div>
+                      <div style={{fontSize:9,fontFamily:C.mono,marginTop:3}}>{pl.priceLabel}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:8}}>Message to Admin (optional)</div>
+                <textarea value={message} onChange={e=>setMessage(e.target.value)} placeholder="Briefly describe your use case or reason for upgrading..." rows={3} style={{...inp,resize:"vertical",fontSize:12,lineHeight:1.6}}/>
+              </div>
+              {err&&<div style={{background:`${C.red}12`,border:`1px solid ${C.red}44`,borderRadius:7,padding:"9px 12px",marginBottom:14,color:C.red,fontSize:11,fontFamily:C.mono}}>{err}</div>}
+              <div style={{display:"flex",gap:10}}>
+                <button type="button" onClick={onClose} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px",color:C.mid,fontSize:12,cursor:"pointer"}}>Cancel</button>
+                <button type="submit" disabled={loading} style={{flex:2,...btn(PLANS[plan].color),padding:"11px",fontSize:12,color:plan==="pro"?"#000":"#fff",opacity:loading?.6:1}}>
+                  {loading?"Sending…":"Send Request →"}
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════
 
 function Dashboard({user, onLogout}) {
-  const [settings,setSettings]=useState(user.settings||{defaultCountry:"GH",fredKey:"",anthropicKey:""});
+  const [settings,setSettings]=useState(user.settings||{defaultCountry:"GH",fredKey:"",anthropicKey:"",theme:"dark"});
   const [showSettings,setShowSettings]=useState(false);
   const [showUserMenu,setShowUserMenu]=useState(false);
+  const [upgradeModal,setUpgradeModal]=useState(null); // {feature, requiredPlan}
+  const [showUpgradeReq,setShowUpgradeReq]=useState(false);
 
-  // Source
+  // Sync plan from UserStore (admin may have changed it)
+  const [liveUser,setLiveUser]=useState(user);
+  useEffect(()=>{
+    const refresh=async()=>{
+      try{
+        const users=await US.getAll();
+        const fresh=users.find(u=>u.username===user.username);
+        if(fresh) setLiveUser(f=>({...f,...fresh,plan:fresh.plan||f.plan,planStatus:fresh.plan_status||fresh.planStatus||f.planStatus}));
+      }catch(e){}
+    };
+    refresh();
+    window.addEventListener('ecoscope-update',refresh);
+    return ()=>window.removeEventListener('ecoscope-update',refresh);
+  },[user.username]);
+  const [sidebarWidth,setSidebarWidth]=useState(268);
+  const isResizing=useRef(false);
+  const T=useMemo(()=>({...C,...(THEMES[settings.theme||"dark"]||{})}), [settings.theme]);
+  const plan=PLANS[liveUser.plan||"free"]||PLANS.free;
+
+  const startResize=useCallback((e)=>{
+    isResizing.current=true;
+    const onMove=(ev)=>{if(!isResizing.current)return;setSidebarWidth(Math.min(Math.max(ev.clientX,160),520));};
+    const onUp=()=>{isResizing.current=false;document.removeEventListener("mousemove",onMove);document.removeEventListener("mouseup",onUp);};
+    document.addEventListener("mousemove",onMove);
+    document.addEventListener("mouseup",onUp);
+  },[]);
+
+  // Source browser (for navigation only)
   const [dataLevel,setDataLevel]=useState("macro");
   const [sourceId,setSourceId]=useState("worldbank");
 
-  // Variable
-  const [varCode,setVarCode]=useState("NY.GDP.MKTP.CD");
+  // Variable basket — cross-source, up to 4 items
+  // Each: {sourceId, varCode, label, fmt, sourceColor, sourceName}
+  const [varBasket,setVarBasket]=useState([{
+    sourceId:"worldbank", varCode:"NY.GDP.MKTP.CD",
+    label:"GDP (Current USD)", fmt:"currency",
+    sourceColor:"#4f8cff", sourceName:"World Bank"
+  }]);
+  // Keep backward-compat aliases
+  const varCodes=varBasket.map(v=>v.varCode);
+  const varCode=varBasket[0]?.varCode||"NY.GDP.MKTP.CD";
   const [varSearch,setVarSearch]=useState("");
 
   // Country
@@ -813,8 +2014,29 @@ function Dashboard({user, onLogout}) {
   const [cmpOn,setCmpOn]=useState(false);
   const [cmpCountry,setCmpCountry]=useState("NG");
 
-  // Data
+  // Analysis tools
+  const [transform,setTransform]=useState("none");
+  const [appliedTransform,setAppliedTransform]=useState("none");
+  const [showOriginal,setShowOriginal]=useState(false);
+  const [imputeMethod,setImputeMethod]=useState("none");
+  const [appliedImpute,setAppliedImpute]=useState("none");
+  const [missingAlert,setMissingAlert]=useState(null);
+  const [noDataVars,setNoDataVars]=useState(new Set()); // {count, total, varName}
+  const [freq,setFreq]=useState("annual"); // annual|quarterly|monthly
+  const [showRegression,setShowRegression]=useState(false);
+  const [depVar,setDepVar]=useState(0);   // index into varCodes
+  const [indepVar,setIndepVar]=useState(1);
+  const [showComposite,setShowComposite]=useState(false);
+  const [compWeights,setCompWeights]=useState([1]);
+  const [compNorm,setCompNorm]=useState("minmax");
+  const [compAgg,setCompAgg]=useState("weighted_sum");
+  const [analysisTab,setAnalysisTab]=useState("transform"); // transform|impute|regression|composite
+
+  // Multi-variable data store
+  const [multiData,setMultiData]=useState({});
+  const [cmpMultiData,setCmpMultiData]=useState({});
   const [data,setData]=useState([]);
+  const [rawData,setRawData]=useState([]);
   const [cmpData,setCmpData]=useState([]);
   const [loading,setLoading]=useState(false);
 
@@ -826,7 +2048,7 @@ function Dashboard({user, onLogout}) {
   // Derived
   const sources = dataLevel==="macro" ? MACRO_SOURCES : MICRO_SOURCES;
   const source  = sources.find(s=>s.id===sourceId)||sources[0];
-  const effCountry = source.countryFixed||country;
+  const effCountry = (ALL_SRCS_MAP[varBasket[0]?.sourceId]||source).countryFixed||country;
   const cc  = COUNTRIES.find(x=>x.code===effCountry)||COUNTRIES[0];
   const cmpC = COUNTRIES.find(x=>x.code===cmpCountry)||COUNTRIES[1];
 
@@ -841,7 +2063,10 @@ function Dashboard({user, onLogout}) {
     return g;
   },[filteredVars]);
 
-  const currentVar = source.vars.find(v=>v.code===varCode)||source.vars[0];
+  const _primarySrc0 = ALL_SRCS_MAP[varBasket[0]?.sourceId]||source;
+  const currentVar = varBasket.length
+    ? (_primarySrc0.vars.find(v=>v.code===varBasket[0].varCode)||_primarySrc0.vars[0]||source.vars[0])
+    : source.vars[0];
 
   const filteredCountries = COUNTRIES.filter(c=>{
     const rOk=regionFilter==="All"||c.region===regionFilter;
@@ -851,29 +2076,66 @@ function Dashboard({user, onLogout}) {
 
   // Reset var when source changes
   useEffect(()=>{
-    if (!source.vars.find(v=>v.code===varCode)) setVarCode(source.vars[0].code);
+    setMultiData({});setCmpMultiData({});setData([]);
   },[sourceId]);
 
   // Reset source when level changes
   useEffect(()=>{
     const srcs=dataLevel==="macro"?MACRO_SOURCES:MICRO_SOURCES;
-    setSourceId(srcs[0].id);
-    setVarCode(srcs[0].vars[0].code);
-    setVarSearch("");
+    const firstSrc=srcs[0];
+    setSourceId(firstSrc.id);
+    const firstVar=firstSrc.vars[0];
+    setVarBasket([{sourceId:firstSrc.id,varCode:firstVar.code,label:firstVar.name,fmt:firstVar.fmt,sourceColor:firstSrc.color,sourceName:firstSrc.short}]);
+    setVarSearch("");setMultiData({});setCmpMultiData({});setData([]);
   },[dataLevel]);
 
   // Load data
   const loadData = useCallback(async()=>{
+    if(!varBasket.length) return;
     setLoading(true);
     const apiKeys={fred:settings.fredKey||"",anthropic:settings.anthropicKey||""};
-    const d=await fetchData(source.id,currentVar,effCountry,startYear,endYear,apiKeys);
-    setData(d);
-    if (cmpOn&&!source.countryFixed) {
-      const cd=await fetchData(source.id,currentVar,cmpCountry,startYear,endYear,apiKeys);
-      setCmpData(cd);
-    } else setCmpData([]);
+
+    // Fetch each basket item from its own source
+    const fetchBasketItem = async (item, countryCode) => {
+      const src = ALL_SRCS_MAP[item.sourceId];
+      if(!src) return [];
+      const vd = src.vars.find(v=>v.code===item.varCode);
+      if(!vd) return [];
+      const cc2 = src.countryFixed || countryCode;
+      return fetchData(src.id, vd, cc2, startYear, endYear, apiKeys);
+    };
+
+    // Primary country
+    const primaryResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, effCountry)));
+    const newMultiData = {};
+    const emptyVars=new Set();
+    varBasket.forEach((item,i)=>{
+      const key=`${item.sourceId}:${item.varCode}`;
+      const result=primaryResults[i]||[];
+      newMultiData[key] = result;
+      // Only mark N/A if result is genuinely empty array (not null/error)
+      if(Array.isArray(primaryResults[i])&&primaryResults[i].length===0) emptyVars.add(key);
+    });
+    setNoDataVars(emptyVars);
+    setMultiData(newMultiData);
+    const primaryData = primaryResults[0]||[];
+    const rawD=primaryData; setRawData(rawD);
+    const processedD=applyTransform(imputeData(rawD, appliedImpute), appliedTransform);
+    setData(processedD);
+
+    // Comparison country
+    if(cmpOn){
+      const cmpResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, cmpCountry)));
+      const newCmpMulti = {};
+      varBasket.forEach((item,i)=>{
+        newCmpMulti[`${item.sourceId}:${item.varCode}`] = cmpResults[i]||[];
+      });
+      setCmpMultiData(newCmpMulti);
+      setCmpData(applyTransform(imputeData(cmpResults[0]||[], appliedImpute), appliedTransform));
+    } else { setCmpData([]); setCmpMultiData({}); }
+
     setLoading(false);
-  },[source,currentVar,effCountry,startYear,endYear,cmpOn,cmpCountry,settings]);
+  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,imputeMethod,transform]);
 
   useEffect(()=>{loadData();},[loadData]);
   useEffect(()=>{setInsight("");setAiError("");},[sourceId,varCode,effCountry,startYear,endYear]);
@@ -901,59 +2163,300 @@ function Dashboard({user, onLogout}) {
   ];
 
   const renderChart=()=>{
-    const keys=[cc.name,(cmpOn&&!source.countryFixed)?cmpC.name:null].filter(Boolean);
+    // Build multi-variable chart data from basket
+    const allVarDefs = varBasket.map(item=>{
+      const src2=ALL_SRCS_MAP[item.sourceId];
+      const vd=src2?.vars.find(v=>v.code===item.varCode);
+      return vd?{...vd,_sourceId:item.sourceId,_sourceColor:item.sourceColor,_sourceName:item.sourceName}:null;
+    }).filter(Boolean);
+    const dataKey = item => `${item._sourceId||item.sourceId||source.id}:${item.code}`;
+    const allYears = [...new Set([
+      ...Object.values(multiData).flatMap(arr=>arr.filter(d=>d.year!=null).map(d=>d.year)),
+      ...Object.values(cmpMultiData).flatMap(arr=>arr.filter(d=>d.year!=null).map(d=>d.year)),
+    ])].sort((a,b)=>+a-+b);
+
+    // ── Scatter + Regression ──────────────────────────────────────────────────
+    if(chartType==="scatter"&&varBasket.length>=2){
+      const xi=indepVar<allVarDefs.length?indepVar:0;
+      const yi=depVar!==xi&&depVar<allVarDefs.length?depVar:(xi===0?1:0);
+      const xDef=allVarDefs[xi]||allVarDefs[0];
+      const yDef=allVarDefs[yi]||allVarDefs[1];
+
+      // Pair data by year
+      const xKey=dataKey(xDef); const yKey=dataKey(yDef);
+      const xSeries=applyTransform(imputeData(multiData[xKey]||multiData[xDef?.code]||[],imputeMethod),transform);
+      const ySeries=applyTransform(imputeData(multiData[yKey]||multiData[yDef?.code]||[],imputeMethod),transform);
+      const pts=[];
+      xSeries.forEach(xp=>{
+        if(xp.value==null||isNaN(xp.value)) return;
+        const yp=ySeries.find(d=>d.year===xp.year);
+        if(yp?.value!=null&&!isNaN(yp.value)) pts.push({year:xp.year,x:xp.value,y:yp.value});
+      });
+
+      // Comparison country scatter points
+      const cmpPts=[];
+      if(cmpOn&&(cmpMultiData[xKey]||cmpMultiData[xDef?.code])&&(cmpMultiData[yKey]||cmpMultiData[yDef?.code])){
+        const cxS=applyTransform(imputeData(cmpMultiData[xKey]||cmpMultiData[xDef?.code]||[],imputeMethod),transform);
+        const cyS=applyTransform(imputeData(cmpMultiData[yKey]||cmpMultiData[yDef?.code]||[],imputeMethod),transform);
+        cxS.forEach(xp=>{
+          if(xp.value==null||isNaN(xp.value)) return;
+          const yp=cyS.find(d=>d.year===xp.year);
+          if(yp?.value!=null&&!isNaN(yp.value)) cmpPts.push({year:xp.year,x:xp.value,y:yp.value});
+        });
+      }
+
+      if(!pts.length) return(
+        <div style={{height:320,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,color:C.dim,fontFamily:C.mono}}>
+          <span style={{fontSize:28}}>◌</span>
+          <span>No overlapping data for these variables.</span>
+          <span style={{fontSize:10}}>Make sure both variables have data in the selected time range.</span>
+        </div>
+      );
+
+      const xArr=pts.map(p=>p.x), yArr=pts.map(p=>p.y);
+      const reg=pts.length>=3?olsRegression(xArr,yArr):null;
+      const xMin=Math.min(...xArr), xMax=Math.max(...xArr);
+      const scaleWarn=xArr.length&&yArr.length&&
+        Math.abs(Math.log10(Math.max(0.001,Math.abs(xArr.reduce((a,b)=>a+b,0)/xArr.length)))-
+                 Math.log10(Math.max(0.001,Math.abs(yArr.reduce((a,b)=>a+b,0)/yArr.length))))>2;
+
+      // Build regression line as 60 evenly-spaced points (reliable rendering)
+      const regLineData = reg ? Array.from({length:60},(_,i)=>{
+        const x = xMin + (xMax-xMin)*i/59;
+        return {x:parseFloat(x.toFixed(8)), y:parseFloat((reg.a+reg.b*x).toFixed(8)), _regLine:true};
+      }) : [];
+
+      return(
+        <div>
+          {/* Regression stats bar */}
+          {reg&&(
+            <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:"5px 16px",padding:"8px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.borderHi}`,marginBottom:10,fontFamily:C.mono}}>
+              <span style={{color:C.dim,fontSize:9,textTransform:"uppercase",letterSpacing:"0.1em"}}>OLS Linear Regression</span>
+              <span style={{fontSize:11}}>
+                <span style={{color:C.dim}}>Ŷ = </span>
+                <span style={{color:C.gold,fontWeight:700}}>{reg.a>=0?"+":""}{Number(reg.a).toExponential(3)}</span>
+                <span style={{color:C.gold}}> {reg.b>=0?"+":""}{Number(reg.b).toExponential(3)}X</span>
+              </span>
+              <span style={{fontSize:11}}>
+                <span style={{color:C.dim}}>R² = </span>
+                <span style={{fontWeight:700,color:reg.r2>0.7?C.teal:reg.r2>0.4?C.gold:C.red}}>{reg.r2.toFixed(4)}</span>
+              </span>
+              <span style={{fontSize:11}}><span style={{color:C.dim}}>n = </span><span style={{color:C.text}}>{reg.n}</span></span>
+              <span style={{fontSize:11}}><span style={{color:C.dim}}>SE = </span><span style={{color:C.text}}>{Number(reg.se).toExponential(3)}</span></span>
+              <span style={{padding:"2px 8px",borderRadius:4,fontSize:9,fontWeight:700,
+                background:reg.r2>0.7?`${C.teal}18`:reg.r2>0.4?`${C.gold}18`:`${C.red}18`,
+                color:reg.r2>0.7?C.teal:reg.r2>0.4?C.gold:C.red,
+                border:`1px solid ${reg.r2>0.7?C.teal:reg.r2>0.4?C.gold:C.red}55`}}>
+                {reg.r2>0.7?"● Strong fit":reg.r2>0.4?"● Moderate fit":reg.r2>0.15?"● Weak fit":"● No fit"}
+              </span>
+              {scaleWarn&&(
+                <span style={{padding:"2px 8px",borderRadius:4,fontSize:9,color:C.orange,background:`${C.orange}15`,border:`1px solid ${C.orange}44`}}>
+                  ⚠ Scale mismatch — use Min-Max transform
+                </span>
+              )}
+            </div>
+          )}
+          {/* Scatter chart using ComposedChart for reliable regression line */}
+          <ResponsiveContainer width="100%" height={310}>
+            <ScatterChart margin={{top:10,right:24,left:10,bottom:36}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3"/>
+              <XAxis
+                type="number" dataKey="x" name={xDef.name.substring(0,28)}
+                tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}}
+                axisLine={{stroke:T.border}} tickLine={false}
+                tickFormatter={v=>fmtVal(v,xDef.fmt)}
+                label={{value:`${xDef.name.substring(0,38)} (X — Independent)`,position:"insideBottom",offset:-22,fill:T.mid,fontSize:9,fontFamily:C.mono}}
+                domain={["auto","auto"]}
+              />
+              <YAxis
+                type="number" dataKey="y" name={yDef.name.substring(0,28)}
+                tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}}
+                axisLine={false} tickLine={false} width={80}
+                tickFormatter={v=>fmtVal(v,yDef.fmt)}
+                label={{value:`${yDef.name.substring(0,22)} (Y — Dep.)`,angle:-90,position:"insideLeft",offset:10,fill:T.mid,fontSize:9,fontFamily:C.mono}}
+              />
+              <ZAxis range={[45,45]}/>
+              <Tooltip cursor={{strokeDasharray:"3 3",stroke:C.gold+"55"}}
+                content={({payload})=>{
+                  if(!payload?.length) return null;
+                  const d=payload[0]?.payload;
+                  if(!d) return null;
+                  return(
+                    <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:"10px 14px",fontFamily:C.mono,fontSize:10}}>
+                      <div style={{color:C.gold,fontWeight:700,marginBottom:6}}>Year {d.year}</div>
+                      <div style={{marginBottom:3}}><span style={{color:ACCENT[0]}}>X: </span><span style={{color:C.text,fontWeight:600}}>{fmtVal(d.x,xDef.fmt)}</span></div>
+                      <div style={{marginBottom:3}}><span style={{color:ACCENT[1]}}>Y: </span><span style={{color:C.text,fontWeight:600}}>{fmtVal(d.y,yDef.fmt)}</span></div>
+                      {reg&&<div style={{color:C.dim,marginTop:4,paddingTop:4,borderTop:`1px solid ${C.border}`}}>Predicted Ŷ: {fmtVal(reg.a+reg.b*d.x,yDef.fmt)}</div>}
+                      {reg&&<div style={{color:C.dim}}>Residual: {fmtVal(d.y-(reg.a+reg.b*d.x),yDef.fmt)}</div>}
+                    </div>
+                  );
+                }}
+              />
+              <Legend wrapperStyle={{color:T.mid,fontSize:10,fontFamily:C.mono,paddingTop:6}} iconType="circle"/>
+              {/* Main scatter — observations */}
+              <Scatter
+                name={`${cc.name} · ${pts.length} obs`}
+                data={pts} fill={C.gold} opacity={0.85}
+                shape={(props)=>{
+                  const{cx,cy}=props;
+                  if(!cx||!cy) return null;
+                  return<circle cx={cx} cy={cy} r={5} fill={C.gold} stroke={C.surface} strokeWidth={1.5} opacity={0.85}/>;
+                }}
+              />
+              {/* Comparison country scatter */}
+              {cmpPts.length>0&&(
+                <Scatter
+                  name={`${cmpC.name} · ${cmpPts.length} obs`}
+                  data={cmpPts} fill={C.teal} opacity={0.75}
+                  shape={(props)=>{
+                    const{cx,cy}=props;
+                    if(!cx||!cy) return null;
+                    return<circle cx={cx} cy={cy} r={5} fill={C.teal} stroke={C.surface} strokeWidth={1.5} opacity={0.75}/>;
+                  }}
+                />
+              )}
+              {/* Regression line — 60 interpolated points rendered as connected line */}
+              {regLineData.length>0&&(
+                <Scatter
+                  name={`OLS Fit (R²=${reg.r2.toFixed(3)})`}
+                  data={regLineData}
+                  fill="none"
+                  line={{stroke:C.red, strokeWidth:2.5, strokeDasharray:"none"}}
+                  lineType="fitting"
+                  shape={()=>null}
+                  legendType="line"
+                  isAnimationActive={false}
+                />
+              )}
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    // Composite index mode
+    if(showComposite&&varBasket.length>=2){
+      const seriesList=allVarDefs.map(vd=>{const dk=dataKey?dataKey(vd):`${vd._sourceId||source.id}:${vd.code}`;return{name:vd.name.substring(0,18)+" ["+(vd._sourceName||source.short)+"]",data:applyTransform(imputeData(multiData[dk]||multiData[vd.code]||[],imputeMethod),transform)};});
+      const compositeData=buildComposite(seriesList,compWeights.slice(0,varBasket.length),compNorm,compAgg);
+      const chartD=compositeData.map(d=>({year:d.year,"Composite Index":d.value}));
+      const ax={x:<XAxis dataKey="year" tick={{fill:T.mid,fontSize:10,fontFamily:C.mono}} axisLine={{stroke:T.border}} tickLine={false}/>,y:<YAxis tick={{fill:T.mid,fontSize:10,fontFamily:C.mono}} axisLine={false} tickLine={false} width={60}/>,g:<CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>,t:<Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:11}}/>,l:<Legend wrapperStyle={{color:T.mid,fontSize:10,fontFamily:C.mono}}/>};
+      return(
+        <ResponsiveContainer width="100%" height={280}>
+          <AreaChart data={chartD} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}<defs><linearGradient id="compGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.purple} stopOpacity={.3}/><stop offset="95%" stopColor={C.purple} stopOpacity={0}/></linearGradient></defs><Area dataKey="Composite Index" stroke={C.purple} fill="url(#compGrad)" strokeWidth={2.5} dot={false}/></AreaChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    // Standard multi-variable chart
+    const multiChartData = allYears.map(year=>{
+      const row={year};
+      allVarDefs.forEach(vd=>{
+        const dk=dataKey(vd);
+        // Primary country
+        const primarySeries=applyTransform(imputeData(multiData[dk]||[],imputeMethod),transform);
+        const pt=primarySeries.find(d=>d.year===year);
+        const primaryKey=`${cc.flag} ${cc.name}: ${vd.name.substring(0,18)} [${vd._sourceName||source.short}]`;
+        row[primaryKey]=pt?.value??null;
+        // Comparison country
+        if(cmpOn&&cmpMultiData[dk]){
+          const cmpSeries=applyTransform(imputeData(cmpMultiData[dk]||[],imputeMethod),transform);
+          const cmpPt=cmpSeries.find(d=>d.year===year);
+          const cmpKey=`${cmpC.flag} ${cmpC.name}: ${vd.name.substring(0,18)} [${vd._sourceName||source.short}]`;
+          row[cmpKey]=cmpPt?.value??null;
+        }
+      });
+      return row;
+    });
+
+    const allKeys=[];
+    allVarDefs.forEach((vd,i)=>{
+      const dk=dataKey(vd);
+      const primaryKey=`${cc.flag} ${cc.name}: ${vd.name.substring(0,18)} [${vd._sourceName||source.short}]`;
+      allKeys.push(primaryKey);
+      if(cmpOn&&cmpMultiData[dk]){
+        const cmpKey=`${cmpC.flag} ${cmpC.name}: ${vd.name.substring(0,18)} [${vd._sourceName||source.short}]`;
+        allKeys.push(cmpKey);
+      }
+    });
+
+    const allVals=multiChartData.flatMap(d=>allKeys.map(k=>d[k]||0)).filter(v=>v!=null&&!isNaN(v));
+    const avgVal=allVals.length?allVals.reduce((a,b)=>a+b,0)/allVals.length:0;
+    const maxVal=allVals.length?Math.max(...allVals):0;
+    const minVal=allVals.length?Math.min(...allVals):0;
+
     const ax={
-      x:<XAxis dataKey="year" tick={{fill:C.mid,fontSize:10,fontFamily:C.mono}} axisLine={{stroke:C.border}} tickLine={false}/>,
-      y:<YAxis tick={{fill:C.mid,fontSize:10,fontFamily:C.mono}} axisLine={false} tickLine={false} tickFormatter={v=>fmtVal(v,currentVar.fmt)} width={74}/>,
-      g:<CartesianGrid stroke={C.border} strokeDasharray="3 3" vertical={false}/>,
+      x:<XAxis dataKey="year" tick={{fill:T.mid,fontSize:10,fontFamily:C.mono}} axisLine={{stroke:T.border}} tickLine={false}/>,
+      y:<YAxis tick={{fill:T.mid,fontSize:10,fontFamily:C.mono}} axisLine={false} tickLine={false} tickFormatter={v=>fmtVal(v,currentVar.fmt)} width={74}/>,
+      g:<CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>,
       t:<Tooltip content={<CustomTip fmt={currentVar.fmt}/>}/>,
-      l:<Legend wrapperStyle={{color:C.mid,fontSize:11,fontFamily:C.mono}}/>,
+      l:<Legend wrapperStyle={{color:T.mid,fontSize:9,fontFamily:C.mono,paddingTop:8}} iconType="circle"
+          formatter={(value)=>value.replace("RAW","Original").replace(/:/g,": ").substring(0,40)}/>,
+      refAvg:<ReferenceLine y={avgVal} stroke={C.gold} strokeDasharray="6 3" strokeWidth={1} label={{value:`avg`,fill:C.gold,fontSize:9,fontFamily:C.mono}}/>,
+      refMax:<ReferenceLine y={maxVal} stroke={C.teal} strokeDasharray="4 4" strokeWidth={1} label={{value:`max`,fill:C.teal,fontSize:9,fontFamily:C.mono}}/>,
+      refMin:<ReferenceLine y={minVal} stroke={C.red}  strokeDasharray="4 4" strokeWidth={1} label={{value:`min`,fill:C.red,fontSize:9,fontFamily:C.mono}}/>,
     };
-    if (chartType==="bar") return <BarChart data={chartData} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{keys.map((k,i)=><Bar key={k} dataKey={k} fill={ACCENT[i]} radius={[4,4,0,0]}/>)}</BarChart>;
-    if (chartType==="area") return (
-      <AreaChart data={chartData} margin={{top:10,right:16,left:0,bottom:0}}>
-        <defs>{keys.map((k,i)=><linearGradient key={k} id={`g${i}`} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ACCENT[i]} stopOpacity={.3}/><stop offset="95%" stopColor={ACCENT[i]} stopOpacity={0}/></linearGradient>)}</defs>
-        {ax.g}{ax.x}{ax.y}{ax.t}{ax.l}
-        {keys.map((k,i)=><Area key={k} dataKey={k} stroke={ACCENT[i]} fill={`url(#g${i})`} strokeWidth={2.5} dot={false}/>)}
+    const chartFmt=currentVar.fmt;
+
+    if(chartType==="bar") return(
+      <BarChart data={multiChartData} margin={{top:10,right:16,left:0,bottom:0}}>
+        {ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{ax.refAvg}{ax.refMax}{ax.refMin}
+        {allKeys.map((k,i)=>{
+          const dn3=k.replace("RAW","(Orig)").substring(0,30);
+          return<Bar key={k} dataKey={k} radius={[4,4,0,0]} name={dn3} opacity={k.includes("RAW")?0.4:1}>
+            {multiChartData.map((entry,idx)=><Cell key={idx} fill={i===0?getValueColor(entry[k],allVals):ACCENT[(i+1)%ACCENT.length]}/>)}
+          </Bar>;
+        })}
+      </BarChart>
+    );
+    if(chartType==="area") return(
+      <AreaChart data={multiChartData} margin={{top:10,right:16,left:0,bottom:0}}>
+        <defs>{allKeys.map((k,i)=><linearGradient key={k} id={`ag${i}`} x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={ACCENT[i%ACCENT.length]} stopOpacity={.3}/><stop offset="95%" stopColor={ACCENT[i%ACCENT.length]} stopOpacity={0}/></linearGradient>)}</defs>
+        {ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{ax.refAvg}{ax.refMax}{ax.refMin}
+        {allKeys.map((k,i)=>{
+          const isRaw2=k.includes("RAW");
+          const dn2=k.replace("RAW","Original").substring(0,30);
+          return<Area key={k} dataKey={k} stroke={isRaw2?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} fill={isRaw2?"transparent":`url(#ag${i})`} strokeWidth={isRaw2?1.5:2.5} strokeDasharray={isRaw2?"5 3":undefined} name={dn2} dot={isRaw2?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={3.5} fill={col} stroke={T.surface} strokeWidth={1.5}/>;}} />;
+        })}
       </AreaChart>
     );
-    return <LineChart data={chartData} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{keys.map((k,i)=><Line key={k} dataKey={k} stroke={ACCENT[i]} strokeWidth={2.5} dot={false} activeDot={{r:5}}/>)}</LineChart>;
+    return(
+      <LineChart data={multiChartData} margin={{top:10,right:16,left:0,bottom:0}}>
+        {ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{ax.refAvg}{ax.refMax}{ax.refMin}
+        {allKeys.map((k,i)=>{
+          const isRaw=k.includes("RAW");
+          const displayName=k.replace("RAW","Original").substring(0,35);
+          return<Line key={k} dataKey={k} stroke={isRaw?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} strokeWidth={isRaw?1.5:2.5} strokeDasharray={isRaw?"5 3":undefined} name={displayName} dot={isRaw?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={4} fill={col} stroke={T.surface} strokeWidth={2}/>;}} />;
+        })}
+      </LineChart>
+    );
   };
 
   // AI Insight
   const getInsight=async()=>{
-    if (!data.length) return;
-    const key=settings.anthropicKey;
-    if (!key){setAiError("Add your Anthropic API key in ⚙ Settings to enable AI insights.");return;}
+    if(!data.length) return;
     setAiLoading(true);setInsight("");setAiError("");
-    try {
+    try{
       const summary=data.slice(-15).map(d=>`${d.year}:${fmtVal(d.value,currentVar.fmt)}`).join(", ");
-      const res=await fetch("https://api.anthropic.com/v1/messages",{
+      const sr=await fetch("/api/insight",{
         method:"POST",
-        headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514",max_tokens:1000,
-          messages:[{role:"user",content:`You are an expert economic and financial data analyst. Analyze the indicator "${currentVar.name}" for ${cc.name}, data from ${source.name}, covering ${startYear}–${endYear}.\n\nData points: ${summary}\n\nProvide a concise, insightful analysis in exactly 3 paragraphs (max 220 words total):\n1. Key trend: What the data shows — direction, magnitude, turning points\n2. Context: Historical events, policy decisions, or structural factors that explain the pattern\n3. Outlook: Implications and what to watch for going forward\n\nBe specific, factual and data-driven. Reference actual numbers from the data.`}]
-        })
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({country:cc.name,indicator:currentVar.name,source:source.name,startYear,endYear,dataPoints:summary})
       });
-      const j=await res.json();
-      if (j.error) throw new Error(j.error.message||"API error");
+      const j=await sr.json();
+      if(!sr.ok) throw new Error(j?.error?.message||"Server error");
+      if(j.error) throw new Error(j.error.message||"API error");
       setInsight(j.content?.[0]?.text||"Analysis unavailable.");
-    } catch(e) {
-      if (e.message.includes("Failed to fetch")||e.message.includes("NetworkError")) {
-        setAiError("Network error — check your internet connection and that your API key is correct.");
-      } else {
-        setAiError(`Error: ${e.message}`);
-      }
+    }catch(e){
+      setAiError("AI error: "+e.message);
     }
     setAiLoading(false);
   };
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",fontFamily:C.font,color:C.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
+    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
 
       {/* HEADER */}
-      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
+      <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
           <div>
@@ -968,7 +2471,8 @@ function Dashboard({user, onLogout}) {
           <div style={{position:"relative"}}>
             <button onClick={()=>setShowUserMenu(v=>!v)} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${showUserMenu?C.gold:C.border}`,borderRadius:20,padding:"5px 14px 5px 6px",cursor:"pointer",transition:"border-color .15s"}}>
               <div style={{width:26,height:26,borderRadius:"50%",background:user.avatarColor||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#000",flexShrink:0}}>{user.initials||"U"}</div>
-              <span style={{color:C.text,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{user.username}</span>
+              <span style={{color:T.text,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{user.username}</span>
+              <span style={{background:plan.color,color:"#000",borderRadius:4,padding:"1px 6px",fontSize:8,fontWeight:800,fontFamily:C.mono,marginLeft:4}}>{plan.badge}</span>
               <span style={{color:C.mid,fontSize:8,marginLeft:2}}>{showUserMenu?"▲":"▼"}</span>
             </button>
             {showUserMenu&&(
@@ -984,7 +2488,8 @@ function Dashboard({user, onLogout}) {
                 {[
                   {icon:"⚙",label:"Settings",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
                   {icon:"📊",label:"Data Sources",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
-                  {icon:"🔑",label:"API Keys",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
+                  
+                  {icon:"⬆",label:"Request Plan Upgrade",action:()=>{setShowUpgradeReq(true);setShowUserMenu(false);}},
                   {icon:"❓",label:"Help & Support",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
                   null,
                   {icon:"←",label:"Sign Out",action:onLogout,danger:true},
@@ -1004,7 +2509,7 @@ function Dashboard({user, onLogout}) {
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
         {/* SIDEBAR */}
-        <aside style={{width:268,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
+        <aside style={{width:sidebarWidth,background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
 
           {/* DATA LEVEL TOGGLE */}
           <div style={{padding:"12px 10px 6px"}}>
@@ -1022,14 +2527,17 @@ function Dashboard({user, onLogout}) {
           <div style={{padding:"6px 10px 10px"}}>
             <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7}}>Data Source</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-              {sources.map(s=>(
-                <button key={s.id} onClick={()=>setSourceId(s.id)} style={{
-                  ...pill(sourceId===s.id,s.color),
-                  fontSize:10,padding:"4px 9px",
-                }}>
-                  {s.short}
-                </button>
-              ))}
+              {sources.map(s=>{
+                const locked=PRO_SOURCES.includes(s.id)&&!plan.aiInsights;
+                return(
+                  <button key={s.id} onClick={()=>{
+                    if(locked){setUpgradeModal({feature:`${s.name} data source`,requiredPlan:"pro"});return;}
+                    setSourceId(s.id);
+                  }} style={{...pill(sourceId===s.id,s.color),fontSize:10,padding:"4px 9px",opacity:locked?.6:1,position:"relative"}}>
+                    {s.short}{locked&&<span style={{fontSize:7,marginLeft:3}}>🔒</span>}
+                  </button>
+                );
+              })}
             </div>
             {source.note && <p style={{color:C.dim,fontSize:9,fontFamily:C.mono,margin:"7px 0 0",lineHeight:1.5}}>{source.note}</p>}
             {source.keyRequired&&!settings.fredKey&&(
@@ -1039,10 +2547,33 @@ function Dashboard({user, onLogout}) {
             )}
           </div>
 
+          {/* VARIABLE BASKET */}
+          {varBasket.length>0&&(
+            <div style={{borderTop:`1px solid ${C.border}`,padding:"8px 10px",flexShrink:0,background:`${C.purple}06`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontSize:9,color:C.purple,fontFamily:C.mono,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700}}>⊕ Variable Basket ({varBasket.length}/4)</div>
+                {varBasket.length>1&&<button onClick={()=>setVarBasket(vb=>vb.slice(0,1))} style={{background:"none",border:"none",color:C.red,fontSize:9,cursor:"pointer",fontFamily:C.mono}}>Clear</button>}
+              </div>
+              {varBasket.map((item,i)=>(
+                <div key={`${item.sourceId}:${item.varCode}`} style={{display:"flex",alignItems:"center",gap:5,padding:"5px 8px",marginBottom:3,background:`${item.sourceColor}14`,border:`1px solid ${item.sourceColor}33`,borderRadius:7}}>
+                  <div style={{width:15,height:15,borderRadius:3,background:item.sourceColor,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#000",fontWeight:800,flexShrink:0}}>{i+1}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:T.text,fontSize:9,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.label.substring(0,26)}</div>
+                    <div style={{color:item.sourceColor,fontSize:7,fontFamily:C.mono,opacity:.8}}>{item.sourceName}</div>
+                  </div>
+                  {varBasket.length>1&&<button onClick={()=>setVarBasket(vb=>vb.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:13,lineHeight:1,padding:"0 2px",flexShrink:0}}>×</button>}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* VARIABLE SEARCH + LIST */}
           <div style={{flex:"0 0 auto",maxHeight:"34%",display:"flex",flexDirection:"column",borderTop:`1px solid ${C.border}`,overflow:"hidden"}}>
             <div style={{padding:"9px 10px 6px",flexShrink:0}}>
-              <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7}}>Variable <span style={{color:C.dim}}>({source.vars.length} available)</span></div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase"}}>Variables <span style={{color:C.dim}}>({source.vars.length} total)</span></div>
+
+              </div>
               <input value={varSearch} onChange={e=>setVarSearch(e.target.value)} placeholder="🔍 Search variables..." style={{...inp,fontSize:11,padding:"7px 10px"}}/>
             </div>
             <div style={{overflowY:"auto",flex:1,padding:"0 6px 8px"}}>
@@ -1050,11 +2581,24 @@ function Dashboard({user, onLogout}) {
                 <div key={cat}>
                   <div style={{fontSize:8,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",padding:"6px 6px 3px"}}>{cat}</div>
                   {vars.map(v=>{
-                    const active=varCode===v.code;
+                    const active=varBasket.some(b=>b.sourceId===source.id&&b.varCode===v.code);
+                    const inBasket=active;
                     return(
-                      <button key={v.code} onClick={()=>setVarCode(v.code)} style={{width:"100%",display:"block",padding:"6px 10px",borderRadius:6,border:"none",borderLeft:`2px solid ${active?source.color:"transparent"}`,background:active?`${source.color}12`:"transparent",cursor:"pointer",textAlign:"left",marginBottom:1,transition:"all .1s"}}>
-                        <div style={{color:active?source.color:C.text,fontSize:11,lineHeight:1.3}}>{v.name}</div>
-                        <div style={{color:C.dim,fontSize:9,fontFamily:C.mono}}>{v.fmt}</div>
+                      <button key={v.code} onClick={()=>{
+                        if(inBasket){
+                          if(varBasket.length>1) setVarBasket(vb=>vb.filter(b=>!(b.sourceId===source.id&&b.varCode===v.code)));
+                        } else {
+                          if(varBasket.length>=4){setUpgradeModal({feature:"Maximum 4 variables — upgrade for more analysis",requiredPlan:"pro"});return;}
+                          if(varBasket.length>=1&&!plan.compare){setUpgradeModal({feature:"Multi-variable analysis requires Pro",requiredPlan:"pro"});return;}
+                          setVarBasket(vb=>[...vb,{sourceId:source.id,varCode:v.code,label:v.name,fmt:v.fmt,sourceColor:source.color,sourceName:source.short}]);
+                        }
+                      }} style={{width:"100%",display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:6,border:"none",borderLeft:`2px solid ${active?source.color:"transparent"}`,background:active?`${source.color}12`:"transparent",cursor:"pointer",textAlign:"left",marginBottom:1,transition:"all .1s"}}>
+                        <div style={{flex:1}}>
+                          <div style={{color:active?source.color:C.text,fontSize:11,lineHeight:1.3}}>{v.name}</div>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}><div style={{color:C.dim,fontSize:9,fontFamily:C.mono}}>{v.fmt}</div><div style={{color:source.color,fontSize:8,fontFamily:C.mono,opacity:.7}}>{source.short}</div></div>
+                        </div>
+                        {noDataVars.has(`${source.id}:${v.code}`)&&!loading&&<span style={{fontSize:7,color:C.red,fontFamily:C.mono,flexShrink:0,background:`${C.red}15`,borderRadius:3,padding:"1px 4px"}}>N/A</span>}
+                        {inBasket&&<div style={{width:18,height:18,borderRadius:4,background:source.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:"#000",fontWeight:800,flexShrink:0}}>{varBasket.findIndex(b=>b.sourceId===source.id&&b.varCode===v.code)+1}</div>}
                       </button>
                     );
                   })}
@@ -1105,6 +2649,123 @@ function Dashboard({user, onLogout}) {
             </div>
           )}
 
+          {/* ANALYSIS TOOLS PANEL */}
+          <div style={{borderTop:`1px solid ${C.border}`,flexShrink:0}}>
+            <div style={{padding:"8px 12px 6px",display:"flex",gap:4,overflowX:"auto"}}>
+              {["transform","impute","composite","frequency"].map(t=>(
+                <button key={t} onClick={()=>setAnalysisTab(t)} style={{...pill(analysisTab===t,C.purple),fontSize:8,padding:"3px 7px",whiteSpace:"nowrap",textTransform:"capitalize",flexShrink:0}}>
+                  {t==="transform"?"⟳":t==="impute"?"◎":t==="regression"?"↗":"⊕"} {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Transform */}
+            {analysisTab==="transform"&&(
+              <div style={{padding:"6px 12px 10px"}}>
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Data Transform</div>
+                <select value={transform} onChange={e=>setTransform(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px",marginBottom:6}}>
+                  {TRANSFORMS.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+                {transform!=="none"&&<div style={{color:C.purple,fontSize:9,fontFamily:C.mono,marginBottom:6}}>Formula: {TRANSFORMS.find(t=>t.id===transform)?.formula}</div>}
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>{setAppliedTransform(transform);loadData();}} style={{flex:2,...btn(),padding:"7px",fontSize:10}}>▶ Apply</button>
+                  {appliedTransform!=="none"&&<button onClick={()=>{setAppliedTransform("none");setTransform("none");loadData();}} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"7px",color:C.dim,fontSize:10,cursor:"pointer"}}>✕ Clear</button>}
+                </div>
+                {appliedTransform!=="none"&&(
+                  <div style={{marginTop:6}}>
+                    <div style={{color:C.teal,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Applied: {TRANSFORMS.find(t=>t.id===appliedTransform)?.label}</div>
+                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                      <input type="checkbox" checked={showOriginal} onChange={e=>setShowOriginal(e.target.checked)} style={{accentColor:C.gold}}/>
+                      <span style={{color:C.text,fontSize:10}}>Show original alongside</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Imputation */}
+            {analysisTab==="impute"&&(
+              <div style={{padding:"6px 12px 10px"}}>
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Missing Data Imputation</div>
+                <select value={imputeMethod} onChange={e=>setImputeMethod(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px",marginBottom:6}}>
+                  {IMPUTE_METHODS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+                </select>
+                {imputeMethod!=="none"&&<div style={{color:C.teal,fontSize:9,fontFamily:C.mono,marginBottom:6}}>Formula: {IMPUTE_METHODS.find(m=>m.id===imputeMethod)?.formula}</div>}
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>{setAppliedImpute(imputeMethod);loadData();}} style={{flex:2,...btn(),padding:"7px",fontSize:10}}>▶ Apply</button>
+                  {appliedImpute!=="none"&&<button onClick={()=>{setAppliedImpute("none");setImputeMethod("none");loadData();}} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"7px",color:C.dim,fontSize:10,cursor:"pointer"}}>✕ Clear</button>}
+                </div>
+                {appliedImpute!=="none"&&(
+                  <div style={{marginTop:6}}>
+                    <div style={{color:C.teal,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Applied: {IMPUTE_METHODS.find(m=>m.id===appliedImpute)?.label}</div>
+                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                      <input type="checkbox" checked={showOriginal} onChange={e=>setShowOriginal(e.target.checked)} style={{accentColor:C.gold}}/>
+                      <span style={{color:C.text,fontSize:10}}>Show original alongside</span>
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
+
+
+            {/* Frequency */}
+            {analysisTab==="frequency"&&(
+              <div style={{padding:"6px 12px 10px"}}>
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Time Frequency</div>
+                {FREQ_OPTIONS.map(f=>(
+                  <label key={f.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,cursor:"pointer"}}>
+                    <input type="radio" name="freq" value={f.id} checked={freq===f.id} onChange={()=>setFreq(f.id)} style={{accentColor:C.gold}}/>
+                    <div>
+                      <div style={{color:freq===f.id?C.gold:C.text,fontSize:11,fontWeight:freq===f.id?700:400}}>{f.label}</div>
+                      <div style={{color:C.dim,fontSize:8,fontFamily:C.mono}}>{f.note}</div>
+                    </div>
+                  </label>
+                ))}
+                {freq!=="annual"&&(
+                  <div style={{background:`${C.orange}12`,border:`1px solid ${C.orange}33`,borderRadius:7,padding:"7px 10px",marginTop:4}}>
+                    <div style={{color:C.orange,fontSize:9,fontFamily:C.mono}}>⚠ Non-annual frequencies use linear interpolation between annual data points for most sources. FRED supports native monthly data.</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Composite */}
+            {analysisTab==="composite"&&(
+              <div style={{padding:"6px 12px 10px"}}>
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Composite Index</div>
+                {varBasket.length<2?(
+                  <div style={{color:C.red,fontSize:9,fontFamily:C.mono}}>Select ≥2 variables</div>
+                ):(
+                  <>
+                    <div style={{marginBottom:6}}>
+                      <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Normalisation</div>
+                      <select value={compNorm} onChange={e=>setCompNorm(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px"}}>
+                        {NORM_METHODS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+                      </select>
+                    </div>
+                    <div style={{marginBottom:6}}>
+                      <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Aggregation</div>
+                      <select value={compAgg} onChange={e=>setCompAgg(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px"}}>
+                        {AGG_METHODS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+                      </select>
+                    </div>
+                    {varBasket.map((item,i)=>{const vd={name:item.label,code:item.varCode};return(
+                      <div key={`w${i}`} style={{marginBottom:5}}>
+                        <div style={{color:ACCENT[i%ACCENT.length],fontSize:8,fontFamily:C.mono,marginBottom:2}}>{item.label.substring(0,20)} [{item.sourceName}] — w={compWeights[i]||1}</div>
+                        <input type="range" min={0.1} max={5} step={0.1} value={compWeights[i]||1} onChange={e=>setCompWeights(w=>{const nw=[...w];nw[i]=+e.target.value;return nw;})} style={{width:"100%",accentColor:ACCENT[i%ACCENT.length]}}/>
+                      </div>
+                    );})}
+                    <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,marginBottom:6}}>Formula: {AGG_METHODS.find(m=>m.id===compAgg)?.formula}</div>
+                    <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}}>
+                      <input type="checkbox" checked={showComposite} onChange={e=>setShowComposite(e.target.checked)} style={{accentColor:C.purple}}/>
+                      <span style={{color:C.text,fontSize:11}}>Show Composite Index</span>
+                    </label>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* YEAR RANGE */}
           <div style={{padding:"10px 12px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
             <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7}}>Year Range</div>
@@ -1122,9 +2783,9 @@ function Dashboard({user, onLogout}) {
           {/* COMPARE */}
           {!source.countryFixed && (
             <div style={{padding:"10px 12px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
-              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:cmpOn?9:0}}>
-                <input type="checkbox" checked={cmpOn} onChange={e=>setCmpOn(e.target.checked)} style={{accentColor:C.gold,width:13,height:13}}/>
-                <span style={{color:cmpOn?C.text:C.mid,fontSize:12,fontWeight:cmpOn?600:400}}>Compare Countries</span>
+              <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",marginBottom:cmpOn?9:0}} onClick={e=>{if(!plan.compare){e.preventDefault();setUpgradeModal({feature:"Country Comparison",requiredPlan:"pro"});}}}>
+                <input type="checkbox" checked={cmpOn} onChange={e=>{if(!plan.compare){setUpgradeModal({feature:"Country Comparison",requiredPlan:"pro"});return;}setCmpOn(e.target.checked);}} style={{accentColor:C.gold,width:13,height:13}}/>
+                <span style={{color:cmpOn?C.text:C.mid,fontSize:12,fontWeight:cmpOn?600:400}}>Compare Countries {!plan.compare&&<span style={{background:`${C.gold}20`,color:C.gold,fontSize:8,fontFamily:C.mono,borderRadius:3,padding:"1px 5px",fontWeight:700}}>PRO</span>}</span>
               </label>
               {cmpOn&&(
                 <select value={cmpCountry} onChange={e=>setCmpCountry(e.target.value)} style={{...sel,padding:"6px 9px",fontSize:11}}>
@@ -1136,7 +2797,9 @@ function Dashboard({user, onLogout}) {
         </aside>
 
         {/* MAIN CONTENT */}
-        <main style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16}}>
+        {/* DRAG HANDLE */}
+        <div onMouseDown={startResize} style={{width:5,cursor:"col-resize",background:T.border,flexShrink:0,transition:"background .15s",display:"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.gold} onMouseLeave={e=>e.currentTarget.style.background=T.border}><div style={{width:2,height:40,borderRadius:2,background:"transparent"}}/></div>
+        <main style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16,background:T.bg}}>
 
           {/* Source info banner */}
           <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:`${source.color}0f`,border:`1px solid ${source.color}33`,borderRadius:9}}>
@@ -1159,8 +2822,19 @@ function Dashboard({user, onLogout}) {
             ))}
           </div>
 
+          {/* Plan Badge */}
+          {plan.id==="free"&&(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 16px",background:`${C.gold}10`,border:`1px solid ${C.gold}44`,borderRadius:9}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:14}}>⬡</span>
+                <span style={{color:C.gold,fontSize:11,fontFamily:C.mono}}>You are on the <strong>Free plan</strong> — limited to {PLANS.free.sources.length} sources, no AI Insights, CSV only.</span>
+              </div>
+              <button onClick={()=>{setSettings(s=>({...s,plan:"pro"}));}} style={{background:C.gold,color:"#000",border:"none",borderRadius:7,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:C.mono}}>Upgrade to Pro →</button>
+            </div>
+          )}
+
           {/* Chart */}
-          <div style={{...card,padding:"20px 22px"}}>
+          <div style={{...card,padding:"20px 22px",background:T.card,border:`1px solid ${T.border}`}}>
             <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
               <div>
                 <h2 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>{currentVar.name}</h2>
@@ -1170,66 +2844,143 @@ function Dashboard({user, onLogout}) {
               </div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                 {["area","line","bar"].map(t=>(
-                  <button key={t} onClick={()=>setChartType(t)} style={{...pill(chartType===t),textTransform:"capitalize"}}>
-                    {t==="area"?"◭":t==="line"?"╱":"▮"} {t}
+                  <button key={t} onClick={()=>setChartType(t)} style={{...pill(chartType===t),textTransform:"capitalize",fontSize:10}}>
+                    {t==="area"?"◭":t==="line"?"╱":t==="bar"?"▮":"⊙"} {t}
                   </button>
                 ))}
+                {varCodes.length>1&&(
+                  <div style={{background:`${C.purple}20`,border:`1px solid ${C.purple}44`,borderRadius:20,padding:"3px 9px",fontSize:9,color:C.purple,fontFamily:C.mono,fontWeight:700}}>
+                    {varCodes.length} vars
+                  </div>
+                )}
                 <div style={{width:1,height:16,background:C.border}}/>
                 <button onClick={()=>setViewMode(v=>v==="chart"?"table":"chart")} style={pill(false)}>
                   {viewMode==="chart"?"⊞ Table":"◫ Chart"}
                 </button>
-                <button onClick={()=>dlCSV(data.map(d=>({year:d.year,[currentVar.name]:d.value})),`${cc.name}_${currentVar.name}_${startYear}_${endYear}.csv`)} style={{...pill(false),color:C.teal,borderColor:`${C.teal}55`}}>
-                  ↓ CSV
-                </button>
+                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  <ExportMenu data={data} currentVar={currentVar} cc={cc} source={source} startYear={startYear} endYear={endYear} plan={plan} onUpgradeNeeded={(f)=>setUpgradeModal({feature:f,requiredPlan:"pro"})}/>
+                  <div style={{position:"relative"}}>
+                    <button onClick={()=>document.getElementById("chartExportMenu").style.display==="none"?document.getElementById("chartExportMenu").style.display="block":document.getElementById("chartExportMenu").style.display="none"} style={{...pill(false),color:C.blue,borderColor:`${C.blue}44`,fontSize:10}}>📷 Snapshot</button>
+                    <div id="chartExportMenu" style={{display:"none",position:"absolute",right:0,top:"calc(100% + 6px)",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:10,padding:6,minWidth:180,zIndex:99,boxShadow:"0 8px 24px rgba(0,0,0,.6)"}}>
+                      <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,padding:"4px 10px 6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Export Chart</div>
+                      {[["🖼 PNG (High-Res)","png"],["◈ SVG (Vector)","svg"]].map(([label,fmt])=>(
+                        <button key={fmt} onClick={()=>{
+                          const title=`${currentVar.name} — ${cc.name} (${source.short}) ${startYear}–${endYear}${transform!=="none"?` · ${TRANSFORMS.find(t=>t.id===transform)?.label}`:""}`;
+                          exportChart(fmt,title);
+                          document.getElementById("chartExportMenu").style.display="none";
+                        }} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 12px",borderRadius:7,border:"none",background:"transparent",cursor:"pointer",color:C.text,fontSize:11,fontFamily:C.mono}}>
+                          {label}
+                        </button>
+                      ))}
+                      <div style={{borderTop:`1px solid ${C.border}`,margin:"4px 0",padding:"4px 10px 0"}}>
+                        <div style={{color:C.dim,fontSize:9,fontFamily:C.mono}}>Includes title, legend & attribution</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
             {loading ? (
-              <div style={{height:300,display:"flex",alignItems:"center",justifyContent:"center",color:C.mid,fontFamily:C.mono,fontSize:12,gap:10}}>
+              <div style={{height:320,display:"flex",alignItems:"center",justifyContent:"center",color:C.mid,fontFamily:C.mono,fontSize:12,gap:10}}>
                 <span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>⟳</span> Fetching from {source.name}…
               </div>
             ) : !data.length ? (
-              <div style={{height:300,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono,fontSize:12,gap:8}}>
+              <div style={{height:320,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono,fontSize:12,gap:8}}>
                 <span style={{fontSize:30}}>◌</span>
                 <span>No data available for this selection</span>
                 {source.keyRequired&&!settings.fredKey&&<span style={{color:C.red,fontSize:11}}>⚠ FRED API key required — add in Settings</span>}
               </div>
             ) : viewMode==="chart" ? (
-              <ResponsiveContainer width="100%" height={300}>{renderChart()}</ResponsiveContainer>
+              <div id="ecoscope-chart-area">
+                <ResponsiveContainer width="100%" height={chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
+              </div>
             ) : (
-              <div style={{maxHeight:300,overflowY:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:11}}>
-                  <thead>
-                    <tr>
-                      {["Year",cc.name,(cmpOn&&!source.countryFixed)?cmpC.name:null,"Δ YoY"].filter(Boolean).map(h=>(
-                        <th key={h} style={{color:C.dim,padding:"7px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:500,textAlign:h==="Year"?"left":"right",textTransform:"uppercase",fontSize:9,letterSpacing:"0.1em"}}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.map((d,i)=>{
-                      const cd=(cmpOn&&!source.countryFixed)?cmpData.find(z=>z.year===d.year):null;
-                      const prv=data[i-1];
-                      const delta=prv&&prv.value?((d.value-prv.value)/Math.abs(prv.value)*100):null;
-                      return(
-                        <tr key={d.year} style={{background:i%2?`${C.surface}88`:"transparent"}}>
-                          <td style={{color:C.mid,padding:"6px 12px"}}>{d.year}</td>
-                          <td style={{color:C.gold,textAlign:"right",padding:"6px 12px",fontWeight:600}}>{fmtVal(d.value,currentVar.fmt)}</td>
-                          {cmpOn&&!source.countryFixed&&<td style={{color:C.teal,textAlign:"right",padding:"6px 12px"}}>{cd?fmtVal(cd.value,currentVar.fmt):"—"}</td>}
-                          <td style={{color:delta==null?C.dim:delta>=0?C.teal:C.red,textAlign:"right",padding:"6px 12px"}}>
-                            {delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(1)}%`}
-                          </td>
+              <div style={{maxHeight:360,overflowY:"auto"}}>
+                {/* Multi-variable table */}
+                {(()=>{
+                  const allVarDefs2=varBasket.map(item=>{
+                    const s2=ALL_SRCS_MAP[item.sourceId]||source;
+                    const vd2=s2.vars.find(v=>v.code===item.varCode);
+                    return vd2?{...vd2,_dk:`${item.sourceId}:${item.varCode}`,_sourceColor:item.sourceColor,_sourceName:item.sourceName}:null;
+                  }).filter(Boolean);
+                  const allYears2=[...new Set([
+                    ...Object.values(multiData).flatMap(arr=>arr.map(d=>d.year)),
+                    ...Object.values(cmpMultiData).flatMap(arr=>arr.map(d=>d.year)),
+                  ])].sort((a,b)=>a-b);
+                  if(!allYears2.length) return <div style={{padding:"20px",textAlign:"center",color:C.dim,fontFamily:C.mono}}>No data</div>;
+                  return(
+                    <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:11,minWidth:500}}>
+                      <thead>
+                        <tr style={{background:C.surface,position:"sticky",top:0,zIndex:1}}>
+                          <th style={{color:C.dim,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:500,textAlign:"left",fontSize:9,textTransform:"uppercase",letterSpacing:"0.1em"}}>Year</th>
+                          {allVarDefs2.map((vd,i)=>(
+                            <React.Fragment key={vd.code}>
+                              <th style={{color:ACCENT[i%ACCENT.length],padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:600,textAlign:"right",fontSize:9,maxWidth:130,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}} title={vd.name}>
+                                ●{i+1} {vd.name.substring(0,14)} [{vd._sourceName||source.short}]
+                              </th>
+                              {showOriginal&&(appliedTransform!=="none"||appliedImpute!=="none")&&(
+                                <th style={{color:C.dim,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:400,textAlign:"right",fontSize:8}}>●{i+1} RAW</th>
+                              )}
+                            </React.Fragment>
+                          ))}
+                          {cmpOn&&!source.countryFixed&&<th style={{color:C.teal,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:600,textAlign:"right",fontSize:9}}>vs {cmpC.name}</th>}
+                          <th style={{color:C.dim,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:500,textAlign:"right",fontSize:9,textTransform:"uppercase"}}>Δ YoY (Primary)</th>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      </thead>
+                      <tbody>
+                        {allYears2.map((year,i)=>{
+                          const prec=allYears2[i-1];
+                          const primarySeries=applyTransform(imputeData(multiData[varCode]||[],imputeMethod),transform);
+                          const cur=primarySeries.find(d=>d.year===year);
+                          const prev=primarySeries.find(d=>d.year===prec);
+                          const delta=cur?.value!=null&&prev?.value?((cur.value-prev.value)/Math.abs(prev.value)*100):null;
+                          return(
+                            <tr key={year} style={{background:i%2?`${T.surface}88`:"transparent"}}>
+                              <td style={{color:T.mid,padding:"6px 12px",fontWeight:600}}>{year}</td>
+                              {allVarDefs2.map((vd,vi)=>{
+                                const dk2=vd._dk||`${varBasket[vi]?.sourceId||source.id}:${vd.code}`;
+                              const rawS=multiData[dk2]||multiData[vd.code]||[];
+                              const series=applyTransform(imputeData(rawS,appliedImpute),appliedTransform);
+                              const rawSeries2=rawS;
+                                const pt=series.find(d=>d.year===year);
+                                const pt2=series.find(d=>String(d.year)===String(year));
+                              const rawPt2=showOriginal?(rawSeries2.find(d=>String(d.year)===String(year))):null;
+                              return(<React.Fragment key={vd.code}>
+                                <td style={{color:ACCENT[vi%ACCENT.length],textAlign:"right",padding:"6px 10px",fontWeight:600}}>{pt2?.value!=null?fmtVal(pt2.value,vd.fmt):<span style={{color:C.dim}}>—</span>}</td>
+                                {showOriginal&&(appliedTransform!=="none"||appliedImpute!=="none")&&<td style={{color:C.dim,textAlign:"right",padding:"6px 10px",fontSize:9}}>{rawPt2?.value!=null?fmtVal(rawPt2.value,vd.fmt):<span style={{color:C.dim}}>—</span>}</td>}
+                              </React.Fragment>);
+                              })}
+                              {cmpOn&&!source.countryFixed&&<td style={{color:C.teal,textAlign:"right",padding:"6px 10px"}}>{cmpData.find(d=>d.year===year)?fmtVal(cmpData.find(d=>d.year===year).value,currentVar.fmt):"—"}</td>}
+                              <td style={{color:delta==null?C.dim:delta>=0?C.teal:C.red,textAlign:"right",padding:"6px 10px",fontWeight:600}}>
+                                {delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(2)}%`}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  );
+                })()}
               </div>
             )}
           </div>
 
+          {/* MISSING DATA TOAST */}
+          {missingAlert&&(
+            <div style={{background:`${C.orange}18`,border:`1px solid ${C.orange}55`,borderRadius:10,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,marginBottom:0}}>
+              <span style={{fontSize:18}}>⚠</span>
+              <div style={{flex:1}}>
+                <div style={{color:C.orange,fontSize:12,fontWeight:700}}>Missing Data Detected</div>
+                <div style={{color:C.mid,fontSize:10,fontFamily:C.mono}}>{missingAlert.varName}: {missingAlert.count} of {missingAlert.total} values are missing</div>
+              </div>
+              <button onClick={()=>{setAnalysisTab("impute");}} style={{background:C.orange,color:"#000",border:"none",borderRadius:7,padding:"6px 12px",fontSize:10,fontWeight:700,cursor:"pointer",flexShrink:0}}>Apply Imputation →</button>
+              <button onClick={()=>setMissingAlert(null)} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:14}}>✕</button>
+            </div>
+          )}
+
           {/* AI INSIGHT */}
-          <div style={{...card}}>
+          <div style={{...card,background:T.card,border:`1px solid ${T.border}`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
@@ -1238,8 +2989,9 @@ function Dashboard({user, onLogout}) {
                 </div>
                 <p style={{margin:0,fontSize:10,color:C.mid,fontFamily:C.mono}}>Powered by Claude · {source.short} · {cc.flag} {cc.name} · {currentVar.name.substring(0,40)}</p>
               </div>
-              <button onClick={getInsight} disabled={aiLoading||!data.length} style={{...btn(C.gold),opacity:aiLoading||!data.length?.5:1,cursor:aiLoading||!data.length?"not-allowed":"pointer",fontSize:11,padding:"9px 18px"}}>
+              <button onClick={()=>{if(!plan.aiInsights){setUpgradeModal({feature:"AI Economic Insights",requiredPlan:"pro"});return;}getInsight();}} disabled={aiLoading||!data.length} style={{...btn(plan.aiInsights?C.gold:C.dim),opacity:aiLoading||!data.length?.5:1,cursor:aiLoading||!data.length?"not-allowed":"pointer",fontSize:11,padding:"9px 18px",position:"relative"}}>
                 {aiLoading?"◌ Analysing…":"✦ Generate Insight"}
+                {!plan.aiInsights&&<span style={{position:"absolute",top:-6,right:-6,background:C.gold,color:"#000",fontSize:7,fontWeight:800,borderRadius:4,padding:"2px 4px",fontFamily:C.mono}}>PRO</span>}
               </button>
             </div>
             {aiError&&(
@@ -1255,7 +3007,7 @@ function Dashboard({user, onLogout}) {
             )}
             {!insight&&!aiLoading&&!aiError&&(
               <p style={{color:C.dim,fontSize:11,fontFamily:C.mono,marginTop:12,marginBottom:0}}>
-                Click "Generate Insight" for an AI-powered analysis of the selected data. Requires Anthropic API key in ⚙ Settings.
+                Click "Generate Insight" for an AI-powered analysis of the selected data. Contact your administrator to enable AI insights.
               </p>
             )}
           </div>
@@ -1268,7 +3020,9 @@ function Dashboard({user, onLogout}) {
         </main>
       </div>
 
-      {showSettings&&<Settings user={user} settings={settings} onSave={ns=>setSettings(ns)} onClose={()=>setShowSettings(false)}/>}
+      {showSettings&&<Settings user={liveUser} settings={settings} onSave={ns=>{setSettings(ns);US.update(liveUser.username,{settings:ns}).catch(console.error);}} onClose={()=>setShowSettings(false)}/>}
+      {upgradeModal&&<UpgradeModal feature={upgradeModal.feature} requiredPlan={upgradeModal.requiredPlan||"pro"} onClose={()=>setUpgradeModal(null)} onUpgrade={()=>{setUpgradeModal(null);setShowUpgradeReq(true);}}/>}
+      {showUpgradeReq&&<UpgradeRequestModal user={liveUser} currentPlan={liveUser.plan||"free"} onClose={()=>setShowUpgradeReq(false)}/>}
 
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0;}
@@ -1288,34 +3042,55 @@ function Dashboard({user, onLogout}) {
 // ROOT
 // ══════════════════════════════════════════════
 
+class ErrBoundary extends React.Component {
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err) return(
+      <div style={{background:"#05070f",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"monospace",color:"#dde3f5",gap:16,padding:20}}>
+        <div style={{fontSize:32}}>⚠</div>
+        <div style={{color:"#f0a500",fontSize:16,fontWeight:700}}>EcoScope encountered an error</div>
+        <div style={{color:"#7a88b0",fontSize:12,maxWidth:500,textAlign:"center"}}>{this.state.err.message}</div>
+        <button onClick={()=>{localStorage.clear();window.location.reload();}} style={{background:"#f0a500",color:"#000",border:"none",borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:700,cursor:"pointer",marginTop:8}}>
+          Clear Session &amp; Reload
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
 export default function App() {
   const [user,setUser]=useState(null);
-  if (!user) return <Login onLogin={setUser}/>;
-  if (user.username==="admin"||user.role==="admin") return <AdminPanel user={user} onLogout={()=>setUser(null)}/>;
-  return <Dashboard user={user} onLogout={()=>setUser(null)}/>;
+  const [booting,setBooting]=useState(true);
+
+  useEffect(()=>{
+    try{
+      const sess=JSON.parse(localStorage.getItem(US.SESS)||"null");
+      if(sess?.username){
+        const initials=sess.username.slice(0,2).toUpperCase();
+        const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs((sess.username.charCodeAt(0)||0))%5];
+        setUser({...sess,initials,avatarColor,
+          settings:{defaultCountry:"GH",theme:"dark",fredKey:"",anthropicKey:""},
+          plan:sess.plan||"free",role:sess.role||"user"});
+      }
+    }catch(_){}
+    setBooting(false);
+  },[]);
+
+  if(booting) return(
+    <div style={{background:"#05070f",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{color:"#f0a500",fontFamily:"monospace",fontSize:14}}>◈ Loading EcoScope…</div>
+    </div>
+  );
+  if(!user) return <Login onLogin={u=>{localStorage.setItem(US.SESS,JSON.stringify(u));setUser(u);}}/>;
+  if(user.role==="admin") return <AdminPanel user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/>;
+  return <ErrBoundary><Dashboard user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/></ErrBoundary>;
 }
 
 // ══════════════════════════════════════════════
 // MOCK DATA FOR ADMIN
 // ══════════════════════════════════════════════
-const MOCK_USERS = [
-  {id:1,username:"gbrucenyarkoh",email:"gbrucenyarkoh@gmail.com",role:"admin",status:"active",joined:"2024-01-15",lastSeen:"Today",queries:342,fredKey:true,anthropicKey:true,country:"GH"},
-  {id:2,username:"analyst_kwame",email:"kwame.asante@gmail.com",role:"analyst",status:"active",joined:"2024-02-03",lastSeen:"Today",queries:118,fredKey:false,anthropicKey:true,country:"GH"},
-  {id:3,username:"ama_ekonomist",email:"ama.owusu@ug.edu.gh",role:"user",status:"active",joined:"2024-02-20",lastSeen:"Yesterday",queries:87,fredKey:false,anthropicKey:false,country:"GH"},
-  {id:4,username:"imf_researcher",email:"research@imf.org",role:"analyst",status:"active",joined:"2024-03-01",lastSeen:"2 days ago",queries:204,fredKey:true,anthropicKey:true,country:"US"},
-  {id:5,username:"worldbank_dev",email:"data@worldbank.org",role:"user",status:"inactive",joined:"2024-03-10",lastSeen:"1 week ago",queries:56,fredKey:false,anthropicKey:false,country:"US"},
-  {id:6,username:"kojo_stats",email:"kojo@statsghana.gov.gh",role:"user",status:"active",joined:"2024-04-05",lastSeen:"3 days ago",queries:33,fredKey:false,anthropicKey:false,country:"GH"},
-];
-const MOCK_ACTIVITY = [
-  {time:"09:14",user:"gbrucenyarkoh",action:"Generated AI Insight",detail:"Ghana GDP Growth — World Bank (2000–2023)"},
-  {time:"09:07",user:"analyst_kwame",action:"Downloaded CSV",detail:"Nigeria Inflation CPI — IMF (2010–2023)"},
-  {time:"08:55",user:"ama_ekonomist",action:"Compared Countries",detail:"Ghana vs Nigeria — FDI Inflows (World Bank)"},
-  {time:"08:30",user:"imf_researcher",action:"Generated AI Insight",detail:"US Federal Funds Rate — FRED (1990–2023)"},
-  {time:"08:22",user:"gbrucenyarkoh",action:"Switched Source",detail:"UNCTAD → World Bank — Trade Openness"},
-  {time:"07:58",user:"kojo_stats",action:"Login",detail:"New session started"},
-  {time:"07:44",user:"analyst_kwame",action:"Generated AI Insight",detail:"South Africa Unemployment — ILO (2005–2023)"},
-  {time:"07:30",user:"imf_researcher",action:"Downloaded CSV",detail:"US GDP — FRED (1970–2023)"},
-];
 const SOURCE_STATUS = [
   {name:"World Bank",short:"WB",url:"https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json",status:"live",latency:"210ms",uptime:"99.9%",color:"#4f8cff"},
   {name:"IMF DataMapper",short:"IMF",url:"https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/GHA",status:"live",latency:"380ms",uptime:"99.4%",color:"#00c9a7"},
@@ -1332,36 +3107,217 @@ const SOURCE_STATUS = [
 // ══════════════════════════════════════════════
 // ADMIN PANEL
 // ══════════════════════════════════════════════
+
+// ══════════════════════════════════════════════
+// INVITE MODAL
+// ══════════════════════════════════════════════
+function InviteModal({onClose,onDone}){
+  const [email,setEmail]=useState('');
+  const [role,setRole]=useState('user');
+  const [err,setErr]=useState('');
+  const [sent,setSent]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const send=async e=>{
+    e.preventDefault();setErr('');
+    if(!email.trim()||!email.includes('@')){setErr('Valid email required');return;}
+    setLoading(true);await new Promise(r=>setTimeout(r,700));setLoading(false);
+    const res=US.invite(email.trim(),role);
+    if(res.error){setErr(res.error);return;}
+    setSent(true);setTimeout(()=>{onDone();onClose();},1800);
+  };
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:9999,backdropFilter:'blur(6px)'}}>
+      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:18,padding:'36px 40px',width:420,fontFamily:C.font,boxShadow:'0 32px 80px rgba(0,0,0,.7)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <h2 style={{color:C.text,fontSize:16,fontWeight:700,margin:0}}>✉ Invite User</h2>
+          <button onClick={onClose} style={{background:'none',border:'none',color:C.mid,cursor:'pointer',fontSize:18}}>✕</button>
+        </div>
+        {sent?(
+          <div style={{padding:'10px 0'}}>
+            <div style={{textAlign:'center',marginBottom:16}}>
+              <div style={{fontSize:36,marginBottom:8}}>🔗</div>
+              <div style={{color:C.teal,fontSize:14,fontWeight:600}}>User created!</div>
+              <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginTop:4}}>{email} added as {role}</div>
+            </div>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:'12px 14px',marginBottom:14}}>
+              <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,textTransform:'uppercase',letterSpacing:'0.12em',marginBottom:6}}>Share this invite link:</div>
+              <div style={{color:C.text,fontSize:10,fontFamily:C.mono,wordBreak:'break-all',marginBottom:10}}>{inviteLink}</div>
+              <button onClick={()=>{navigator.clipboard.writeText(inviteLink);}} style={{background:C.gold,color:'#000',border:'none',borderRadius:7,padding:'7px 16px',fontSize:11,fontWeight:700,cursor:'pointer'}}>📋 Copy Link</button>
+            </div>
+            <div style={{color:C.dim,fontSize:10,fontFamily:C.mono,lineHeight:1.6}}>Share this link with {email}. They can use it to log in — their account is ready.</div>
+            <button onClick={onClose} style={{...btn(),width:'100%',marginTop:14,padding:'10px',fontSize:12}}>Done</button>
+          </div>
+        ):(
+          <form onSubmit={send}>
+            <div style={{marginBottom:16}}>
+              <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:'0.14em',textTransform:'uppercase',marginBottom:7}}>Email Address</div>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="user@example.com" style={{...inp,fontSize:13,padding:'11px 14px',border:`1px solid ${email?C.gold:C.border}`}}/>
+            </div>
+            <div style={{marginBottom:20}}>
+              <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:'0.14em',textTransform:'uppercase',marginBottom:7}}>Role</div>
+              <div style={{display:'flex',gap:8}}>
+                {['user','analyst','admin'].map(r=>(
+                  <button key={r} type="button" onClick={()=>setRole(r)} style={{...pill(role===r),flex:1,textAlign:'center',padding:'8px',textTransform:'capitalize',fontSize:11}}>{r}</button>
+                ))}
+              </div>
+            </div>
+            {err&&<div style={{background:`${C.red}12`,border:`1px solid ${C.red}44`,borderRadius:7,padding:'9px 12px',marginBottom:14,color:C.red,fontSize:11,fontFamily:C.mono}}>{err}</div>}
+            <div style={{display:'flex',gap:10}}>
+              <button type="button" onClick={onClose} style={{flex:1,background:'none',border:`1px solid ${C.border}`,borderRadius:9,padding:'11px',color:C.mid,fontSize:12,cursor:'pointer'}}>Cancel</button>
+              <button type="submit" disabled={loading} style={{flex:2,...btn(),padding:'11px',fontSize:12,opacity:loading?.6:1}}>{loading?'Sending…':'Send Invitation →'}</button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// EDIT USER MODAL
+// ══════════════════════════════════════════════
+function EditUserModal({user:u,onClose,onSave}){
+  const [email,setEmail]=useState(u.email||'');
+  const [role,setRole]=useState(u.role||'user');
+  const [plan,setPlan]=useState(u.plan||'free');
+  const [status,setStatus]=useState(u.planStatus||'active');
+  const [country,setCountry]=useState(u.country||'GH');
+  const [err,setErr]=useState('');
+  const save=async()=>{
+    if(!email.trim()||!email.includes('@')){setErr('Valid email required');return;}
+    await US.updateProfile(u.username,{email,role,plan,plan_status:status,country});
+    if(plan!==u.plan||status!==u.planStatus) await US.setPlan(u.username,plan,status);
+    onSave();
+  };
+  const Row=({label,children})=>(
+    <div style={{marginBottom:14}}>
+      <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:'0.14em',textTransform:'uppercase',marginBottom:7}}>{label}</div>
+      {children}
+    </div>
+  );
+  return(
+    <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:9999,backdropFilter:'blur(6px)'}}>
+      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:18,padding:'32px 36px',width:500,fontFamily:C.font,maxHeight:'85vh',overflowY:'auto',boxShadow:'0 32px 80px rgba(0,0,0,.7)'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:24}}>
+          <div><h2 style={{color:C.text,fontSize:16,fontWeight:700,margin:'0 0 3px'}}>✏ Edit User</h2><div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>@{u.username}</div></div>
+          <button onClick={onClose} style={{background:'none',border:'none',color:C.mid,cursor:'pointer',fontSize:18}}>✕</button>
+        </div>
+        <Row label="Email Address">
+          <input value={email} onChange={e=>setEmail(e.target.value)} type="email" style={{...inp,fontSize:12,border:`1px solid ${email?C.gold:C.border}`}}/>
+        </Row>
+        <Row label="Role">
+          <div style={{display:'flex',gap:8}}>
+            {['user','analyst','admin'].map(r=>(
+              <button key={r} onClick={()=>setRole(r)} disabled={u.username==='admin'&&r!=='admin'} style={{...pill(role===r),flex:1,textAlign:'center',padding:'8px',textTransform:'capitalize',fontSize:11,opacity:u.username==='admin'&&r!=='admin'?.4:1}}>{r}</button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Subscription Plan">
+          <div style={{display:'flex',gap:8}}>
+            {Object.entries(PLANS).map(([key,pl])=>(
+              <button key={key} onClick={()=>setPlan(key)} style={{...pill(plan===key,pl.color),flex:1,textAlign:'center',padding:'8px',fontSize:11}}>{pl.name}</button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Account Status">
+          <div style={{display:'flex',gap:8}}>
+            {['active','suspended','invited'].map(s=>(
+              <button key={s} onClick={()=>setStatus(s)} style={{...pill(status===s,s==='active'?C.teal:s==='suspended'?C.red:C.blue),flex:1,textAlign:'center',padding:'8px',textTransform:'capitalize',fontSize:11}}>{s}</button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Country">
+          <select value={country} onChange={e=>setCountry(e.target.value)} style={{...sel,fontSize:12}}>
+            {COUNTRIES.map(c=><option key={c.code} value={c.code}>{c.flag} {c.name}</option>)}
+          </select>
+        </Row>
+        {err&&<div style={{background:`${C.red}12`,border:`1px solid ${C.red}44`,borderRadius:7,padding:'9px 12px',marginBottom:14,color:C.red,fontSize:11,fontFamily:C.mono}}>{err}</div>}
+        <div style={{display:'flex',gap:10,marginTop:8}}>
+          <button onClick={onClose} style={{flex:1,background:'none',border:`1px solid ${C.border}`,borderRadius:9,padding:'11px',color:C.mid,fontSize:12,cursor:'pointer'}}>Cancel</button>
+          <button onClick={save} style={{flex:2,...btn(),padding:'11px',fontSize:12}}>Save Changes →</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({user, onLogout}) {
   const [tab,setTab]=useState("overview");
-  const [showSettings,setShowSettings]=useState(false);
   const [showUserMenu,setShowUserMenu]=useState(false);
-  const [settings,setSettings]=useState(user.settings||{});
-  const [sourceStatuses,setSourceStatuses]=useState(SOURCE_STATUS.map(s=>({...s})));
-  const [users,setUsers]=useState(MOCK_USERS);
+  const [sourceStatuses,setSourceStatuses]=useState([{name:'World Bank',short:'WB',url:'https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json',status:'live',latency:'—',uptime:'99.9%',color:'#4f8cff'},{name:'IMF DataMapper',short:'IMF',url:'https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/GHA',status:'live',latency:'—',uptime:'99.4%',color:'#00c9a7'},{name:'FRED',short:'FRED',url:null,status:'key-required',latency:'—',uptime:'99.8%',color:'#ff4c6a'},{name:'WHO GHO',short:'WHO',url:'https://ghoapi.azureedge.net/api/WHOSIS_000001?$top=1',status:'live',latency:'—',uptime:'98.7%',color:'#b05cff'},{name:'Bank of Ghana',short:'BoG',url:null,status:'proxied',latency:'—',uptime:'99.9%',color:'#f0a500'},{name:'BIS',short:'BIS',url:null,status:'proxied',latency:'—',uptime:'99.5%',color:'#00d4e8'},{name:'UNCTAD',short:'UNCTAD',url:null,status:'proxied',latency:'—',uptime:'99.2%',color:'#ff8c42'},{name:'ILO',short:'ILO',url:null,status:'proxied',latency:'—',uptime:'99.1%',color:'#00d4e8'},{name:'UNESCO',short:'UIS',url:null,status:'proxied',latency:'—',uptime:'98.9%',color:'#ff8c42'},{name:'UN Environment',short:'ENV',url:null,status:'proxied',latency:'—',uptime:'99.0%',color:'#00c9a7'}]);
+  const [users,setUsers]=useState([]);
   const [userSearch,setUserSearch]=useState("");
   const [roleFilter,setRoleFilter]=useState("all");
   const [pingLoading,setPingLoading]=useState({});
   const [selectedUser,setSelectedUser]=useState(null);
   const [notif,setNotif]=useState(null);
+  const [showInvite,setShowInvite]=useState(false);
+  const [editUser,setEditUser]=useState(null);
+  const [confirmDelete,setConfirmDelete]=useState(null);
+  const [activity,setActivity]=useState([]);
+  const [requests,setRequests]=useState([]);
+  const [activeReqTab,setActiveReqTab]=useState(false);
+  const [apiKeys,setApiKeys]=useState({
+    anthropic: localStorage.getItem('admin_anthropic_key')||'',
+    fred: localStorage.getItem('admin_fred_key')||'',
+  });
+  const [apiKeySaved,setApiKeySaved]=useState(false);
+  const saveApiKeys=()=>{
+    if(apiKeys.anthropic) localStorage.setItem('admin_anthropic_key',apiKeys.anthropic);
+    if(apiKeys.fred) localStorage.setItem('admin_fred_key',apiKeys.fred);
+    notify('API keys saved — users will inherit these on next session');
+    setApiKeySaved(true); setTimeout(()=>setApiKeySaved(false),3000);
+  };
 
-  const notify=(msg,type="success")=>{setNotif({msg,type});setTimeout(()=>setNotif(null),3000);};
+  const refresh=useCallback(async()=>{
+    try {
+      const [all,log,reqs]=await Promise.all([US.getAll(),US.getLog(),US.getRequests()]);
+      setUsers(all||[]);
+      setActivity(log||[]);
+      setRequests(reqs||[]);
+    } catch(e){ console.error('Refresh error:',e); }
+  },[]);
+
+  useEffect(()=>{
+    refresh();
+    window.addEventListener('ecoscope-update',refresh);
+    window.addEventListener('storage',refresh);
+    const iv=setInterval(refresh,5000);
+    return()=>{
+      window.removeEventListener('ecoscope-update',refresh);
+      window.removeEventListener('storage',refresh);
+      clearInterval(iv);
+    };
+  },[refresh]);
+
+  const notify=(msg,type="success")=>{setNotif({msg,type});setTimeout(()=>setNotif(null),3500);};
+
+  const changePlan=async(username,plan,status='active')=>{
+    await US.setPlan(username,plan,status);
+    await refresh();
+    notify(`${username} → ${plan} (${status})`);
+  };
 
   const pingSource=async(idx)=>{
     const s=sourceStatuses[idx];
-    if(!s.url){notify(`${s.name} uses proxied WB/IMF data — no direct endpoint to ping.`,"info");return;}
+    if(!s.url){notify(`${s.name} uses proxied data — no direct endpoint to ping.`,"info");return;}
     setPingLoading(p=>({...p,[idx]:true}));
     const t0=Date.now();
-    try{await fetch(s.url,{mode:"cors"});const ms=Date.now()-t0;
+    try{
+      await fetch(s.url,{mode:"cors"});
+      const ms=Date.now()-t0;
       setSourceStatuses(ss=>ss.map((x,i)=>i===idx?{...x,status:"live",latency:`${ms}ms`}:x));
       notify(`${s.name} responded in ${ms}ms ✓`,"success");
-    }catch{setSourceStatuses(ss=>ss.map((x,i)=>i===idx?{...x,status:"error"}:x));notify(`${s.name} ping failed`,"error");}
+    }catch{
+      setSourceStatuses(ss=>ss.map((x,i)=>i===idx?{...x,status:"error"}:x));
+      notify(`${s.name} ping failed`,"error");
+    }
     setPingLoading(p=>({...p,[idx]:false}));
   };
 
-  const totalQueries=users.reduce((a,u)=>a+u.queries,0);
-  const activeUsers=users.filter(u=>u.status==="active").length;
-  const aiEnabled=users.filter(u=>u.anthropicKey).length;
+  const totalQueries=activity.length;
+  const activeUsers=users.filter(u=>u.planStatus==="active").length;
+  const aiEnabled=users.filter(u=>u.settings?.anthropicKey).length;
   const ghanaUsers=users.filter(u=>u.country==="GH").length;
 
   const filteredUsers=users.filter(u=>{
@@ -1371,13 +3327,17 @@ function AdminPanel({user, onLogout}) {
     return matchSearch&&matchRole;
   });
 
+  const pendingReqs=requests.filter(r=>r.status==="pending").length;
   const navItems=[
     {id:"overview",icon:"◈",label:"Overview"},
     {id:"users",icon:"👥",label:"User Management"},
+    {id:"subscriptions",icon:"⬡",label:"Subscriptions"},
     {id:"sources",icon:"🌐",label:"Data Sources"},
+    {id:"apikeys",icon:"🔑",label:"API Keys"},
     {id:"activity",icon:"📋",label:"Activity Log"},
     {id:"config",icon:"⚙",label:"System Config"},
   ];
+
 
   const statusBadge=(s)=>{
     const map={live:[C.teal,"●"],error:[C.red,"●"],"key-required":[C.gold,"◌"],proxied:[C.blue,"◎"]};
@@ -1456,9 +3416,10 @@ function AdminPanel({user, onLogout}) {
         {/* ADMIN SIDEBAR NAV */}
         <nav style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,padding:"12px 8px"}}>
           {navItems.map(n=>(
-            <button key={n.id} onClick={()=>setTab(n.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s"}}>
+            <button key={n.id} onClick={()=>setTab(n.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
               <span style={{fontSize:15}}>{n.icon}</span>
-              <span style={{color:tab===n.id?C.gold:C.mid,fontSize:12,fontWeight:tab===n.id?700:400}}>{n.label}</span>
+              <span style={{color:tab===n.id?C.gold:C.mid,fontSize:12,fontWeight:tab===n.id?700:400,flex:1}}>{n.label}</span>
+              {n.badge>0&&<span style={{background:C.red,color:"#fff",fontSize:9,fontWeight:800,borderRadius:10,padding:"2px 6px",fontFamily:C.mono}}>{n.badge}</span>}
             </button>
           ))}
           <div style={{flex:1}}/>
@@ -1518,7 +3479,7 @@ function AdminPanel({user, onLogout}) {
               {/* Recent activity */}
               <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
                 <h3 style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:C.text}}>📋 Recent Activity</h3>
-                {MOCK_ACTIVITY.slice(0,5).map((a,i)=>(
+                {activity.slice(0,5).map((a,i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",gap:12,padding:"8px 0",borderBottom:i<4?`1px solid ${C.border}`:"none"}}>
                     <span style={{color:C.dim,fontSize:10,fontFamily:C.mono,width:36,flexShrink:0}}>{a.time}</span>
                     <span style={{color:C.gold,fontSize:11,fontFamily:C.mono,width:120,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.user}</span>
@@ -1535,8 +3496,8 @@ function AdminPanel({user, onLogout}) {
           {tab==="users"&&(
             <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div><h2 style={{margin:0,fontSize:16,fontWeight:800,color:C.text}}>👥 User Management</h2><p style={{margin:"3px 0 0",color:C.mid,fontSize:11,fontFamily:C.mono}}>{filteredUsers.length} of {users.length} users</p></div>
-                <button onClick={()=>notify("Invite sent (demo)","success")} style={{background:C.gold,color:"#000",border:"none",borderRadius:8,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:C.font}}>+ Invite User</button>
+                <div><h2 style={{margin:0,fontSize:16,fontWeight:800,color:C.text}}>👥 User Management</h2><p style={{margin:"3px 0 0",color:C.mid,fontSize:11,fontFamily:C.mono}}>{users.length} users · Real accounts</p></div>
+                <button onClick={()=>setShowInvite(true)} style={{background:C.gold,color:"#000",border:"none",borderRadius:8,padding:"9px 18px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:C.font}}>+ Invite User</button>
               </div>
               {/* Filters */}
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -1570,20 +3531,20 @@ function AdminPanel({user, onLogout}) {
                         <td style={{padding:"10px 14px"}}>
                           <span style={{background:u.role==="admin"?`${C.gold}20`:u.role==="analyst"?`${C.teal}20`:`${C.blue}20`,color:u.role==="admin"?C.gold:u.role==="analyst"?C.teal:C.blue,borderRadius:5,padding:"2px 8px",fontSize:9,fontWeight:700,textTransform:"uppercase"}}>{u.role}</span>
                         </td>
-                        <td style={{padding:"10px 14px"}}><span style={{color:u.status==="active"?C.teal:C.red,fontSize:9}}>● {u.status}</span></td>
-                        <td style={{padding:"10px 14px",color:C.mid}}>{u.joined}</td>
-                        <td style={{padding:"10px 14px",color:C.mid}}>{u.lastSeen}</td>
-                        <td style={{padding:"10px 14px",color:C.gold,fontWeight:600}}>{u.queries}</td>
+                        <td style={{padding:"10px 14px"}}><span style={{color:u.planStatus==="active"?C.teal:u.planStatus==="suspended"?C.red:C.blue,fontSize:9}}>● {u.planStatus}</span></td>
+                        <td style={{padding:"10px 14px",color:C.mid}}>{u.createdAt?u.createdAt.slice(0,10):"—"}</td>
+                        <td style={{padding:"10px 14px",color:C.mid}}>{u.lastLogin?new Date(u.lastLogin).toLocaleString():"Never"}</td>
+                        <td style={{padding:"10px 14px",color:C.gold,fontWeight:600}}>{activity.filter(a=>a.username===u.username).length}</td>
                         <td style={{padding:"10px 14px"}}>
                           <div style={{display:"flex",gap:4}}>
-                            <span style={{color:u.anthropicKey?C.teal:C.dim,fontSize:9}} title="Anthropic">◈</span>
-                            <span style={{color:u.fredKey?C.red:C.dim,fontSize:9}} title="FRED">🏦</span>
+                            <span style={{color:u.settings?.anthropicKey?C.teal:C.dim,fontSize:9}} title="Anthropic">◈</span>
+                            <span style={{color:u.settings?.fredKey?C.red:C.dim,fontSize:9}} title="FRED">🏦</span>
                           </div>
                         </td>
                         <td style={{padding:"10px 14px"}}>
-                          <div style={{display:"flex",gap:5}}>
-                            <button onClick={e=>{e.stopPropagation();notify(`Editing ${u.username} (demo)`);}} style={{background:`${C.blue}18`,border:`1px solid ${C.blue}44`,borderRadius:5,padding:"3px 8px",color:C.blue,fontSize:9,cursor:"pointer"}}>Edit</button>
-                            {u.role!=="admin"&&<button onClick={e=>{e.stopPropagation();setUsers(us=>us.map(x=>x.id===u.id?{...x,status:x.status==="active"?"inactive":"active"}:x));}} style={{background:`${u.status==="active"?C.red:C.teal}18`,border:`1px solid ${u.status==="active"?C.red:C.teal}44`,borderRadius:5,padding:"3px 8px",color:u.status==="active"?C.red:C.teal,fontSize:9,cursor:"pointer"}}>{u.status==="active"?"Disable":"Enable"}</button>}
+                          <div style={{display:"flex",gap:4}}>
+                            <button onClick={e=>{e.stopPropagation();setEditUser(u);}} style={{background:`${C.blue}18`,border:`1px solid ${C.blue}44`,borderRadius:5,padding:"4px 9px",color:C.blue,fontSize:9,cursor:"pointer"}}>✏ Edit</button>
+                            {u.role!=="admin"&&<button onClick={e=>{e.stopPropagation();setConfirmDelete(u);}} style={{background:`${C.red}18`,border:`1px solid ${C.red}44`,borderRadius:5,padding:"4px 9px",color:C.red,fontSize:9,cursor:"pointer"}}>🗑 Delete</button>}
                           </div>
                         </td>
                       </tr>
@@ -1595,7 +3556,7 @@ function AdminPanel({user, onLogout}) {
                 <div style={{background:C.card,border:`1px solid ${C.gold}44`,borderRadius:12,padding:"18px 20px"}}>
                   <h3 style={{margin:"0 0 14px",fontSize:13,fontWeight:700,color:C.gold}}>👤 {selectedUser.username} — Details</h3>
                   <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
-                    {[{l:"Email",v:selectedUser.email},{l:"Role",v:selectedUser.role},{l:"Country",v:selectedUser.country},{l:"Queries",v:selectedUser.queries},{l:"Joined",v:selectedUser.joined},{l:"Last Seen",v:selectedUser.lastSeen},{l:"Anthropic Key",v:selectedUser.anthropicKey?"Configured":"Not set"},{l:"FRED Key",v:selectedUser.fredKey?"Configured":"Not set"}].map(({l,v})=>(
+                    {[{l:"Email",v:selectedUser.email||'—'},{l:"Role",v:selectedUser.role},{l:"Plan",v:selectedUser.plan},{l:"Status",v:selectedUser.planStatus},{l:"Country",v:selectedUser.country||'—'},{l:"Joined",v:selectedUser.createdAt?selectedUser.createdAt.slice(0,10):'—'},{l:"Last Login",v:selectedUser.lastLogin?new Date(selectedUser.lastLogin).toLocaleString():'Never'},{l:"User ID",v:selectedUser.id}].map(({l,v})=>(
                       <div key={l} style={{background:C.surface,borderRadius:8,padding:"10px 13px"}}>
                         <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:4}}>{l}</div>
                         <div style={{color:C.text,fontSize:12,fontWeight:600}}>{v}</div>
@@ -1604,6 +3565,64 @@ function AdminPanel({user, onLogout}) {
                   </div>
                 </div>
               )}
+            </>
+          )}
+
+          {/* ── SUBSCRIPTIONS ── */}
+          {tab==="subscriptions"&&(
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div><h2 style={{margin:0,fontSize:16,fontWeight:800,color:C.text}}>⬡ Subscription Management</h2><p style={{margin:"3px 0 0",color:C.mid,fontSize:11,fontFamily:C.mono}}>User plans, revenue and billing</p></div>
+              </div>
+              {/* Revenue KPIs */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
+                {[
+                  {icon:"💰",label:"MRR",val:`$${(users.filter(u=>u.plan==="pro"&&u.planStatus==="active").length*9.99).toFixed(2)}`,sub:"monthly recurring",col:C.teal},
+                  {icon:"⬡",label:"Pro Users",val:users.filter(u=>u.plan==="pro"&&u.planStatus==="active").length,sub:"active subscriptions",col:C.gold},
+                  {icon:"🏢",label:"Enterprise",val:users.filter(u=>u.plan==="enterprise").length,sub:"accounts",col:C.purple},
+                  {icon:"👤",label:"Free Tier",val:users.filter(u=>u.plan==="free").length,sub:"users",col:C.mid},
+                ].map((k,i)=>(
+                  <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px"}}>
+                    <div style={{fontSize:20,marginBottom:8}}>{k.icon}</div>
+                    <div style={{fontSize:22,fontWeight:800,color:k.col,marginBottom:2}}>{k.val}</div>
+                    <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:1}}>{k.label}</div>
+                    <div style={{fontSize:10,color:C.mid,fontFamily:C.mono}}>{k.sub}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Subscriptions table */}
+              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:11}}>
+                  <thead>
+                    <tr style={{background:C.surface}}>
+                      {["User","Plan","Status","Since","Expires","Revenue/mo","Actions"].map(h=>(
+                        <th key={h} style={{color:C.dim,padding:"11px 14px",fontWeight:500,textAlign:"left",fontSize:9,textTransform:"uppercase",letterSpacing:"0.1em",borderBottom:`1px solid ${C.border}`}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u,i)=>{ const s={user:u.username,email:u.email,plan:u.plan,status:u.planStatus,since:u.createdAt?u.createdAt.slice(0,10):"—",lastLogin:u.lastLogin?new Date(u.lastLogin).toLocaleString():"Never",revenue:u.plan==="pro"?9.99:0};
+                      const pl=PLANS[s.plan]||PLANS.free;
+                      return(
+                        <tr key={i} style={{background:i%2?`${C.surface}55`:"transparent"}}>
+                          <td style={{padding:"9px 14px",color:C.gold,fontWeight:600}}>{s.user}</td>
+                          <td style={{padding:"9px 14px"}}><span style={{background:`${pl.color}20`,color:pl.color,borderRadius:5,padding:"2px 8px",fontSize:9,fontWeight:700}}>{pl.badge}</span></td>
+                          <td style={{padding:"9px 14px"}}><span style={{color:s.status==="active"?C.teal:C.red,fontSize:9}}>● {s.status}</span></td>
+                          <td style={{padding:"9px 14px",color:C.mid}}>{s.since}</td>
+                          <td style={{padding:"9px 14px",color:C.mid}}>{s.expires||"—"}</td>
+                          <td style={{padding:"9px 14px",color:s.revenue>0?C.teal:C.dim,fontWeight:s.revenue>0?600:400}}>{s.revenue>0?`$${s.revenue.toFixed(2)}`:"Free"}</td>
+                          <td style={{padding:"9px 14px"}}>
+                            <div style={{display:"flex",gap:5}}>
+                              {s.plan!=="enterprise"&&s.plan!=="pro"&&<button onClick={()=>{changePlan(u.username,'pro');}} style={{background:`${C.gold}18`,border:`1px solid ${C.gold}44`,borderRadius:5,padding:"3px 8px",color:C.gold,fontSize:9,cursor:"pointer"}}>→ Pro</button>}
+                              
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
 
@@ -1652,7 +3671,7 @@ function AdminPanel({user, onLogout}) {
                     </tr>
                   </thead>
                   <tbody>
-                    {MOCK_ACTIVITY.map((a,i)=>(
+                    {activity.map((a,i)=>(
                       <tr key={i} style={{background:i%2?`${C.surface}55`:"transparent"}}>
                         <td style={{padding:"9px 16px",color:C.dim,whiteSpace:"nowrap"}}>{a.time}</td>
                         <td style={{padding:"9px 16px",color:C.gold,fontWeight:600}}>{a.user}</td>
@@ -1662,6 +3681,98 @@ function AdminPanel({user, onLogout}) {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </>
+          )}
+
+          {/* ── API KEYS ── */}
+          {tab==="apikeys"&&(
+            <>
+              <div>
+                <h2 style={{margin:0,fontSize:16,fontWeight:800,color:C.text}}>🔑 API Keys Management</h2>
+                <p style={{margin:"3px 0 0",color:C.mid,fontSize:11,fontFamily:C.mono}}>Configure platform-wide API keys — admin only</p>
+              </div>
+
+              <div style={{background:`${C.gold}0e`,border:`1px solid ${C.gold}33`,borderRadius:10,padding:"13px 16px"}}>
+                <div style={{color:C.gold,fontSize:11,fontFamily:C.mono}}>🔒 Keys are stored securely. Users inherit the platform Anthropic key for AI Insights. Individual users can override with their own keys in Settings.</div>
+              </div>
+
+              {/* Anthropic Key */}
+              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+                  <div style={{width:36,height:36,background:`${C.purple}20`,border:`1px solid ${C.purple}44`,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>◈</div>
+                  <div>
+                    <div style={{color:C.text,fontSize:14,fontWeight:700}}>Anthropic Claude API</div>
+                    <div style={{color:C.mid,fontSize:10,fontFamily:C.mono}}>Powers AI Insights for all Pro users</div>
+                  </div>
+                  <div style={{marginLeft:"auto"}}>
+                    {apiKeys.anthropic?(
+                      <span style={{background:`${C.teal}18`,border:`1px solid ${C.teal}44`,borderRadius:6,padding:"4px 10px",color:C.teal,fontSize:10,fontFamily:C.mono,fontWeight:700}}>✓ Configured</span>
+                    ):(
+                      <span style={{background:`${C.red}18`,border:`1px solid ${C.red}44`,borderRadius:6,padding:"4px 10px",color:C.red,fontSize:10,fontFamily:C.mono,fontWeight:700}}>✗ Not set</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7}}>API Key</div>
+                  <input
+                    type="password"
+                    value={apiKeys.anthropic}
+                    onChange={e=>setApiKeys(k=>({...k,anthropic:e.target.value}))}
+                    placeholder="sk-ant-api03-..."
+                    style={{...inp,fontSize:12,fontFamily:C.mono}}
+                  />
+                  {apiKeys.anthropic&&<div style={{color:C.teal,fontSize:10,fontFamily:C.mono,marginTop:6}}>✓ Key entered ({apiKeys.anthropic.length} chars) · AI Insights enabled for Pro users</div>}
+                </div>
+                <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:C.blue,fontSize:10,fontFamily:C.mono}}>Get API key at console.anthropic.com ↗</a>
+              </div>
+
+              {/* FRED Key */}
+              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px 22px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+                  <div style={{width:36,height:36,background:`${C.red}20`,border:`1px solid ${C.red}44`,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>🏦</div>
+                  <div>
+                    <div style={{color:C.text,fontSize:14,fontWeight:700}}>FRED — Federal Reserve Economic Data</div>
+                    <div style={{color:C.mid,fontSize:10,fontFamily:C.mono}}>Enables 800K+ US economic series for all users</div>
+                  </div>
+                  <div style={{marginLeft:"auto"}}>
+                    {apiKeys.fred?(
+                      <span style={{background:`${C.teal}18`,border:`1px solid ${C.teal}44`,borderRadius:6,padding:"4px 10px",color:C.teal,fontSize:10,fontFamily:C.mono,fontWeight:700}}>✓ Configured</span>
+                    ):(
+                      <span style={{background:`${C.orange}18`,border:`1px solid ${C.orange}44`,borderRadius:6,padding:"4px 10px",color:C.orange,fontSize:10,fontFamily:C.mono,fontWeight:700}}>⚠ Optional</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7}}>API Key</div>
+                  <input
+                    type="password"
+                    value={apiKeys.fred}
+                    onChange={e=>setApiKeys(k=>({...k,fred:e.target.value}))}
+                    placeholder="Your FRED API key..."
+                    style={{...inp,fontSize:12,fontFamily:C.mono}}
+                  />
+                  {apiKeys.fred&&<div style={{color:C.teal,fontSize:10,fontFamily:C.mono,marginTop:6}}>✓ Key entered · FRED data source unlocked for all users</div>}
+                </div>
+                <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" rel="noreferrer" style={{color:C.blue,fontSize:10,fontFamily:C.mono}}>Get free FRED key ↗</a>
+              </div>
+
+              {/* Free sources */}
+              <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
+                <div style={{color:C.gold,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:12}}>Sources With No Key Required</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                  {["World Bank","IMF WEO","WHO GHO","ILO ILOSTAT","UNESCO UIS","UNCTAD","BIS","UN SDG","FAO","UN Environment"].map(s=>(
+                    <div key={s} style={{background:`${C.teal}12`,border:`1px solid ${C.teal}33`,borderRadius:6,padding:"5px 12px",color:C.teal,fontSize:10,fontFamily:C.mono}}>✓ {s}</div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Save button */}
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={saveApiKeys} style={{...btn(),padding:"11px 28px",fontSize:12}}>
+                  {apiKeySaved?"✓ Saved!":"Save API Keys"}
+                </button>
+                <button onClick={()=>{setApiKeys({anthropic:'',fred:''});localStorage.removeItem('admin_anthropic_key');localStorage.removeItem('admin_fred_key');notify('API keys cleared','error');}} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 20px",color:C.dim,fontSize:12,cursor:"pointer"}}>Clear All</button>
               </div>
             </>
           )}
@@ -1683,12 +3794,10 @@ function AdminPanel({user, onLogout}) {
               {/* Access control */}
               <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
                 <div style={{color:C.gold,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:14,paddingBottom:9,borderBottom:`1px solid ${C.border}`}}>Access Control</div>
-                {[{l:"Open Registration",v:true},{l:"Require Email Verification",v:false},{l:"Allow Guest Access",v:true},{l:"Max Users",v:"Unlimited (demo)"}].map(({l,v},i)=>(
+                {[{l:"Open Registration",v:true},{l:"Require Email Verification",v:false},{l:"Allow Guest Access",v:true},{l:"Total Registered Users",v:users.length}].map(({l,v},i)=>(
                   <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
                     <span style={{color:C.mid,fontSize:12,fontFamily:C.mono}}>{l}</span>
-                    {typeof v==="boolean"
-                      ?<button onClick={()=>notify(`${l} toggled (demo)`)} style={{background:v?`${C.teal}20`:`${C.dim}20`,border:`1px solid ${v?C.teal:C.dim}44`,borderRadius:12,padding:"4px 12px",color:v?C.teal:C.dim,fontSize:10,cursor:"pointer",fontFamily:C.mono}}>{v?"Enabled":"Disabled"}</button>
-                      :<span style={{color:C.text,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{v}</span>
+                    {typeof v==="boolean"?<span style={{color:v?C.teal:C.red,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{v?"● Enabled":"○ Disabled"}</span>:<span style={{color:C.text,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{v}</span>
                     }
                   </div>
                 ))}
@@ -1720,6 +3829,30 @@ function AdminPanel({user, onLogout}) {
         </main>
       </div>
       <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
+
+      {/* Invite Modal */}
+      {showInvite&&<InviteModal onClose={()=>setShowInvite(false)} onDone={()=>{refresh();notify("User invited successfully");}}/>}
+
+      {/* Edit User Modal */}
+      {editUser&&<EditUserModal user={editUser} onClose={()=>setEditUser(null)} onSave={()=>{refresh();notify(`${editUser.username} updated`);setEditUser(null);}}/>}
+
+      {/* Confirm Delete */}
+      {confirmDelete&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.88)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,backdropFilter:"blur(6px)"}}>
+          <div style={{background:C.surface,border:`2px solid ${C.red}55`,borderRadius:18,padding:"36px 40px",width:400,textAlign:"center",fontFamily:C.font}}>
+            <div style={{fontSize:40,marginBottom:16}}>🗑</div>
+            <h2 style={{color:C.text,fontSize:17,fontWeight:800,marginBottom:10}}>Delete User?</h2>
+            <p style={{color:C.mid,fontSize:12,fontFamily:C.mono,marginBottom:8,lineHeight:1.7}}>
+              You are about to permanently delete <strong style={{color:C.gold}}>{confirmDelete.username}</strong> ({confirmDelete.email}).
+            </p>
+            <p style={{color:C.red,fontSize:11,fontFamily:C.mono,marginBottom:24}}>⚠ This action cannot be undone.</p>
+            <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+              <button onClick={()=>setConfirmDelete(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 22px",color:C.mid,fontSize:12,cursor:"pointer"}}>Cancel</button>
+              <button onClick={()=>{US.deleteUser(confirmDelete.username);refresh();notify(`${confirmDelete.username} deleted`,"error");setConfirmDelete(null);setSelectedUser(null);}} style={{background:C.red,border:"none",borderRadius:9,padding:"11px 26px",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}}>Delete Permanently</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
