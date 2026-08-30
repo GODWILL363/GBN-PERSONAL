@@ -3154,12 +3154,15 @@ function InviteModal({onClose,onDone}){
   const [err,setErr]=useState('');
   const [sent,setSent]=useState(false);
   const [loading,setLoading]=useState(false);
+  const [inviteLink,setInviteLink]=useState('');
   const send=async e=>{
     e.preventDefault();setErr('');
     if(!email.trim()||!email.includes('@')){setErr('Valid email required');return;}
-    setLoading(true);await new Promise(r=>setTimeout(r,700));setLoading(false);
-    const res=US.invite(email.trim(),role);
+    setLoading(true);
+    const res=await US.invite(email.trim(),role);
+    setLoading(false);
     if(res.error){setErr(res.error);return;}
+    setInviteLink(`${window.location.origin}/?invite=${res.inviteToken}`);
     setSent(true);setTimeout(()=>{onDone();onClose();},1800);
   };
   return(
@@ -3279,6 +3282,8 @@ function EditUserModal({user:u,onClose,onSave}){
 }
 
 function AdminPanel({user, onLogout}) {
+  const isMobile=useIsMobile();
+  const [sidebarOpen,setSidebarOpen]=useState(false);
   const [tab,setTab]=useState("overview");
   const [showUserMenu,setShowUserMenu]=useState(false);
   const [sourceStatuses,setSourceStatuses]=useState([{name:'World Bank',short:'WB',url:'https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json',status:'live',latency:'—',uptime:'99.9%',color:'#4f8cff'},{name:'IMF DataMapper',short:'IMF',url:'https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/GHA',status:'live',latency:'—',uptime:'99.4%',color:'#00c9a7'},{name:'FRED',short:'FRED',url:null,status:'key-required',latency:'—',uptime:'99.8%',color:'#ff4c6a'},{name:'WHO GHO',short:'WHO',url:'https://ghoapi.azureedge.net/api/WHOSIS_000001?$top=1',status:'live',latency:'—',uptime:'98.7%',color:'#b05cff'},{name:'Bank of Ghana',short:'BoG',url:null,status:'proxied',latency:'—',uptime:'99.9%',color:'#f0a500'},{name:'BIS',short:'BIS',url:null,status:'proxied',latency:'—',uptime:'99.5%',color:'#00d4e8'},{name:'UNCTAD',short:'UNCTAD',url:null,status:'proxied',latency:'—',uptime:'99.2%',color:'#ff8c42'},{name:'ILO',short:'ILO',url:null,status:'proxied',latency:'—',uptime:'99.1%',color:'#00d4e8'},{name:'UNESCO',short:'UIS',url:null,status:'proxied',latency:'—',uptime:'98.9%',color:'#ff8c42'},{name:'UN Environment',short:'ENV',url:null,status:'proxied',latency:'—',uptime:'99.0%',color:'#00c9a7'}]);
@@ -3407,7 +3412,7 @@ function AdminPanel({user, onLogout}) {
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:T.text,cursor:"pointer",padding:6,display:"flex",flexDirection:"column",gap:5,flexShrink:0}}><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/></button>}
+          <button id="eco-hamburger" onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:C.text,cursor:"pointer",padding:6,flexDirection:"column",gap:5,flexShrink:0}}><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/></button>
           <div style={{display:"flex",gap:6,fontFamily:C.mono,fontSize:10}}>
             <span style={{color:C.teal}}>● {activeUsers} active</span>
             <span style={{color:C.dim}}>·</span>
@@ -3449,12 +3454,15 @@ function AdminPanel({user, onLogout}) {
         </div>
       </header>
 
-      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+      <div style={{display:"flex",flex:1,overflow:"hidden",position:"relative"}}>
+
+        {/* Mobile overlay */}
+        <div id="eco-overlay" className={sidebarOpen?"open":""} onClick={()=>setSidebarOpen(false)}/>
 
         {/* ADMIN SIDEBAR NAV */}
-        <nav style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,padding:"12px 8px"}}>
+        <nav id="eco-sidebar" className={sidebarOpen?"open":""} style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,padding:"12px 8px"}}>
           {navItems.map(n=>(
-            <button key={n.id} onClick={()=>setTab(n.id)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
+            <button key={n.id} onClick={()=>{setTab(n.id);if(isMobile) setSidebarOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
               <span style={{fontSize:15}}>{n.icon}</span>
               <span style={{color:tab===n.id?C.gold:C.mid,fontSize:12,fontWeight:tab===n.id?700:400,flex:1}}>{n.label}</span>
               {n.badge>0&&<span style={{background:C.red,color:"#fff",fontSize:9,fontWeight:800,borderRadius:10,padding:"2px 6px",fontFamily:C.mono}}>{n.badge}</span>}
