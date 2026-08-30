@@ -2515,8 +2515,32 @@ function Dashboard({user, onLogout}) {
 
       <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
-        {/* SIDEBAR */}
-        <aside style={{width:sidebarWidth,background:T.surface,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
+        {/* Mobile overlay */}
+        {isMobile&&sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
+        {/* SIDEBAR - hidden overlay on mobile, fixed panel on desktop */}
+        <aside style={{
+          background:T.surface,
+          borderRight:`1px solid ${T.border}`,
+          display:"flex",
+          flexDirection:"column",
+          overflowY:"auto",
+          flexShrink:0,
+          // Mobile: fixed drawer, hidden by default
+          ...(isMobile ? {
+            position:"fixed",
+            top:0, left:0, bottom:0,
+            width:"85vw", maxWidth:320,
+            zIndex:99,
+            transform:sidebarOpen?"translateX(0)":"translateX(-105%)",
+            transition:"transform 0.3s ease",
+            boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",
+          } : {
+            // Desktop: normal flow
+            position:"relative",
+            width:sidebarWidth,
+            minWidth:sidebarWidth,
+          })
+        }}>
 
           {/* DATA LEVEL TOGGLE */}
           <div style={{padding:"12px 10px 6px"}}>
@@ -3378,7 +3402,7 @@ function AdminPanel({user, onLogout}) {
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:T.text,cursor:"pointer",padding:6,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:T.text,borderRadius:2}}/></button>}
+          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:T.text,cursor:"pointer",padding:6,display:"flex",flexDirection:"column",gap:5,flexShrink:0}}><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:T.text,borderRadius:2}}/></button>}
           <div style={{display:"flex",gap:6,fontFamily:C.mono,fontSize:10}}>
             <span style={{color:C.teal}}>● {activeUsers} active</span>
             <span style={{color:C.dim}}>·</span>
@@ -3837,6 +3861,24 @@ function AdminPanel({user, onLogout}) {
           </div>
         </main>
       </div>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0;}
+        #eco-sidebar{transition:transform 0.3s ease;z-index:49;}
+        #eco-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:48;}
+        @media(max-width:768px){
+          #eco-sidebar{position:fixed!important;top:0!important;left:0!important;bottom:0!important;width:82vw!important;max-width:320px!important;transform:translateX(-100%)!important;box-shadow:none;}
+          #eco-sidebar.open{transform:translateX(0)!important;box-shadow:6px 0 32px rgba(0,0,0,0.6)!important;}
+          #eco-overlay.open{display:block!important;}
+          #eco-main{width:100%!important;margin-left:0!important;}
+          #eco-hamburger{display:flex!important;}
+          .eco-close-btn{display:block!important;}
+          .eco-breadcrumb{display:none!important;}
+          .eco-subtitle{display:none!important;}
+        }
+        @media(min-width:769px){
+          #eco-hamburger{display:none!important;}
+        }
+      `}</style>
       <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
 
       {/* Invite Modal */}
