@@ -43,7 +43,12 @@ const US = {
   async login(username, password){
     const res = await this._call('POST', '/api/auth/login', {username, password});
     if(res.error) return {error: res.error};
-    localStorage.setItem(this.SESS, JSON.stringify({username, at: new Date().toISOString()}));
+    localStorage.setItem(this.SESS, JSON.stringify({
+      username,
+      role: res.user?.role,
+      plan: res.user?.plan,
+      at: new Date().toISOString()
+    }));
     return {user: res.user};
   },
 
