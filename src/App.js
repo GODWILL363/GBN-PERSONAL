@@ -3472,8 +3472,7 @@ function AdminPanel({user, onLogout}) {
       <div style={{display:"flex",flex:1,overflow:"hidden",position:"relative"}}>
 
         {/* Mobile overlay */}
-        <div id="eco-overlay" className={sidebarOpen&&isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
-        {false&&<div style={{}}/>
+        {sidebarOpen&&isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
 
         {/* ADMIN SIDEBAR NAV */}
         <nav style={{background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
