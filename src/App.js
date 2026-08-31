@@ -911,7 +911,18 @@ const ALL_SOURCES = { macro: MACRO_SOURCES, micro: MICRO_SOURCES };
 // ── Mobile detection hook
 if(typeof document!=="undefined"){let vp=document.querySelector("meta[name=viewport]");if(!vp){vp=document.createElement("meta");vp.name="viewport";document.head.appendChild(vp);}vp.content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no";}
 
-const useIsMobile=()=>{const [m,setM]=React.useState(window.innerWidth<768);React.useEffect(()=>{const h=()=>setM(window.innerWidth<768);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);return m;};
+const useIsMobile=()=>{
+  const check=()=>typeof window!=="undefined"&&(window.innerWidth<768||('ontouchstart' in window&&window.innerWidth<1024));
+  const [m,setM]=React.useState(check());
+  React.useEffect(()=>{
+    const h=()=>setM(check());
+    h(); // run immediately on mount
+    window.addEventListener("resize",h);
+    window.addEventListener("orientationchange",h);
+    return()=>{window.removeEventListener("resize",h);window.removeEventListener("orientationchange",h);};
+  },[]);
+  return m;
+};
 
 // ── Fast source lookup map (module-level) ────────────────────────────────────
 const ALL_SRCS_MAP = (()=>{
@@ -2468,8 +2479,9 @@ function Dashboard({user, onLogout}) {
     <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
 
       {/* HEADER */}
-      <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
+      <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:isMobile?8:12}}>
+          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:C.gold,border:"none",cursor:"pointer",padding:9,borderRadius:7,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/></button>}
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
           <div>
             <div style={{fontSize:15,fontWeight:800,letterSpacing:"-0.3px",lineHeight:1}}>EcoScope</div>
@@ -2547,6 +2559,7 @@ function Dashboard({user, onLogout}) {
           })
         }}>
 
+          {isMobile&&<div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setSidebarOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"5px 12px",fontSize:12,fontFamily:C.mono}}>✕ Close</button></div>}
           {/* DATA LEVEL TOGGLE */}
           <div style={{padding:"12px 10px 6px"}}>
             <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Data Level</div>
@@ -2622,6 +2635,7 @@ function Dashboard({user, onLogout}) {
                     return(
                       <button key={v.code} onClick={()=>{
                         if(isMobile) setSidebarOpen(false);
+                        if(isMobile)setTimeout(()=>setSidebarOpen(false),200);
                         if(inBasket){
                           if(varBasket.length>1) setVarBasket(vb=>vb.filter(b=>!(b.sourceId===source.id&&b.varCode===v.code)));
                         } else {
@@ -3876,11 +3890,6 @@ function AdminPanel({user, onLogout}) {
       </div>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0;}
-        #eco-sidebar{transition:transform 0.3s ease;z-index:49;}
-        #eco-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:48;}
-        @media(max-width:768px){
-          #eco-sidebar{position:fixed!important;top:0!important;left:0!important;bottom:0!important;width:82vw!important;max-width:320px!important;transform:translateX(-100%)!important;box-shadow:none;}
-          #eco-sidebar.open{transform:translateX(0)!important;box-shadow:6px 0 32px rgba(0,0,0,0.6)!important;}
           #eco-overlay.open{display:block!important;}
           #eco-main{width:100%!important;margin-left:0!important;}
           #eco-hamburger{display:flex!important;}
@@ -3888,8 +3897,6 @@ function AdminPanel({user, onLogout}) {
           .eco-breadcrumb{display:none!important;}
           .eco-subtitle{display:none!important;}
         }
-        @media(min-width:769px){
-          #eco-hamburger{display:none!important;}
         }
       `}</style>
       <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
