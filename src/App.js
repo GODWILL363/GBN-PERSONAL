@@ -2485,7 +2485,7 @@ function Dashboard({user, onLogout}) {
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
           <div>
             <div style={{fontSize:15,fontWeight:800,letterSpacing:"-0.3px",lineHeight:1}}>EcoScope</div>
-            <div style={{fontSize:8,color:C.dim,fontFamily:C.mono,letterSpacing:"0.14em"}}>GLOBAL ECONOMIC INTELLIGENCE</div>
+            {!isMobile&&<div style={{fontSize:8,color:C.dim,fontFamily:C.mono,letterSpacing:"0.14em"}}>GLOBAL ECONOMIC INTELLIGENCE</div>}
           </div>
           <div style={{width:1,height:28,background:C.border,margin:"0 6px"}}/>
           <div style={{fontSize:10,color:C.dim,fontFamily:C.mono}}>{source.short} · {cc.flag} {cc.name} · {currentVar.name.substring(0,30)} · {startYear}–{endYear}</div>
@@ -3412,7 +3412,7 @@ function AdminPanel({user, onLogout}) {
       )}
 
       {/* HEADER */}
-      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
+      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10,gap:8,overflow:"hidden"}}>
         <div style={{display:"flex",alignItems:"center",gap:isMobile?8:12}}>
           {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:C.gold,border:"none",cursor:"pointer",padding:9,borderRadius:7,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/></button>}
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
@@ -3427,12 +3427,12 @@ function AdminPanel({user, onLogout}) {
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <button id="eco-hamburger" onClick={()=>setSidebarOpen(o=>!o)} style={{background:"none",border:"none",color:C.text,cursor:"pointer",padding:6,flexDirection:"column",gap:5,flexShrink:0}}><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/><span style={{display:"block",width:20,height:2,background:C.text,borderRadius:2}}/></button>
-          <div style={{display:"flex",gap:6,fontFamily:C.mono,fontSize:10}}>
+          
+          {!isMobile&&<div style={{display:"flex",gap:6,fontFamily:C.mono,fontSize:10}}>
             <span style={{color:C.teal}}>● {activeUsers} active</span>
             <span style={{color:C.dim}}>·</span>
             <span style={{color:C.mid}}>{totalQueries} queries today</span>
-          </div>
+          </div>}
           <div style={{position:"relative"}}>
             <button onClick={()=>setShowUserMenu(v=>!v)} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${showUserMenu?C.gold:C.border}`,borderRadius:20,padding:"5px 14px 5px 6px",cursor:"pointer",transition:"border-color .15s"}}>
               <div style={{width:26,height:26,borderRadius:"50%",background:user.avatarColor||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#000"}}>{user.initials||"A"}</div>
@@ -3846,7 +3846,7 @@ function AdminPanel({user, onLogout}) {
               {/* Platform */}
               <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
                 <div style={{color:C.gold,fontSize:9,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:14,paddingBottom:9,borderBottom:`1px solid ${C.border}`}}>Platform Settings</div>
-                {[{l:"Platform Name",v:"EcoScope"},{l:"Version",v:"v2.0"},{l:"Environment",v:"Development"},{l:"Base URL",v:"http://localhost:3000"}].map(({l,v})=>(
+                {[{l:"Platform Name",v:"EcoScope"},{l:"Version",v:"v2.0"},{l:"Environment",v:"Production"},{l:"Base URL",v:window.location.origin}].map(({l,v})=>(
                   <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
                     <span style={{color:C.mid,fontSize:12,fontFamily:C.mono}}>{l}</span>
                     <span style={{color:C.text,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{v}</span>
