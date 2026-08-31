@@ -2476,7 +2476,7 @@ function Dashboard({user, onLogout}) {
   };
 
   return (
-    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
+    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden",maxWidth:"100vw"}}>
 
       {/* HEADER */}
       <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
@@ -2853,7 +2853,7 @@ function Dashboard({user, onLogout}) {
         <main style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16,background:T.bg}}>
 
           {/* Source info banner */}
-          <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 16px",background:`${source.color}0f`,border:`1px solid ${source.color}33`,borderRadius:9}}>
+          <div style={{display:"flex",alignItems:isMobile?"flex-start":"center",gap:isMobile?6:12,padding:isMobile?"8px 12px":"10px 16px",background:`${source.color}0f`,border:`1px solid ${source.color}33`,borderRadius:9,flexDirection:isMobile?"column":"row"}}>
             <div style={{width:8,height:8,borderRadius:"50%",background:source.color,flexShrink:0}}/>
             <div style={{flex:1}}>
               <span style={{color:source.color,fontWeight:700,fontSize:12}}>{source.name}</span>
@@ -2947,7 +2947,7 @@ function Dashboard({user, onLogout}) {
                 <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
               </div>
             ) : (
-              <div style={{maxHeight:360,overflowY:"auto"}}>
+              <div style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
                 {/* Multi-variable table */}
                 {(()=>{
                   const allVarDefs2=varBasket.map(item=>{
@@ -3412,8 +3412,9 @@ function AdminPanel({user, onLogout}) {
       )}
 
       {/* HEADER */}
-      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
+      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:isMobile?8:12}}>
+          {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:C.gold,border:"none",cursor:"pointer",padding:9,borderRadius:7,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/></button>}
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
           <div>
             <div style={{fontSize:15,fontWeight:800,letterSpacing:"-0.3px",lineHeight:1}}>EcoScope</div>
@@ -3471,10 +3472,12 @@ function AdminPanel({user, onLogout}) {
       <div style={{display:"flex",flex:1,overflow:"hidden",position:"relative"}}>
 
         {/* Mobile overlay */}
-        <div id="eco-overlay" className={sidebarOpen?"open":""} onClick={()=>setSidebarOpen(false)}/>
+        <div id="eco-overlay" className={sidebarOpen&&isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
+        {false&&<div style={{}}/>
 
         {/* ADMIN SIDEBAR NAV */}
-        <nav id="eco-sidebar" className={sidebarOpen?"open":""} style={{width:200,background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,padding:"12px 8px"}}>
+        <nav style={{background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
+          {isMobile&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}><button onClick={()=>setSidebarOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"5px 12px",fontSize:12,fontFamily:C.mono}}>✕ Close</button></div>}
           {navItems.map(n=>(
             <button key={n.id} onClick={()=>{setTab(n.id);if(isMobile) setSidebarOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
               <span style={{fontSize:15}}>{n.icon}</span>
@@ -3500,7 +3503,7 @@ function AdminPanel({user, onLogout}) {
                 <p style={{color:C.mid,fontSize:11,fontFamily:C.mono,margin:0}}>EcoScope Admin Dashboard · {new Date().toLocaleDateString("en-GB",{weekday:"long",year:"numeric",month:"long",day:"numeric"})}</p>
               </div>
               {/* KPI row */}
-              <div style={{display:isMobile?"flex":"grid",gridTemplateColumns:"repeat(4,1fr)",gap:isMobile?8:12,overflowX:isMobile?"auto":"visible",paddingBottom:isMobile?4:0,flexShrink:0}}>
+              <div style={{display:"grid",gridTemplateColumns:isMobile?"repeat(2,1fr)":"repeat(4,1fr)",gap:isMobile?8:12}}>
                 {[
                   {icon:"👥",label:"Total Users",val:users.length,sub:`${activeUsers} active`,col:C.blue},
                   {icon:"📊",label:"Total Queries",val:totalQueries.toLocaleString(),sub:"session total",col:C.gold},
