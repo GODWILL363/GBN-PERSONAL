@@ -1189,6 +1189,84 @@ const interpolateFreq=(data, freq)=>{
   return result;
 };
 
+
+// ── DAG (Directed Acyclic Graph) Causal Analysis ─────────────────────────────
+// Detect cycles in a DAG using DFS
+const dagHasCycle = (nodes, edges) => {
+  const adj = {}; nodes.forEach(n=>adj[n]=[]);
+  edges.forEach(e=>{ if(adj[e.from]) adj[e.from].push(e.to); });
+  const WHITE=0, GRAY=1, BLACK=2;
+  const color = {}; nodes.forEach(n=>color[n]=WHITE);
+  const dfs = (u)=>{
+    color[u]=GRAY;
+    for(const v of (adj[u]||[])){
+      if(color[v]===GRAY) return true;
+      if(color[v]===WHITE && dfs(v)) return true;
+    }
+    color[u]=BLACK;
+    return false;
+  };
+  for(const n of nodes){ if(color[n]===WHITE && dfs(n)) return true; }
+  return false;
+};
+
+// Find all directed paths from src to dst
+const dagPaths = (nodes, edges, src, dst) => {
+  const adj = {}; nodes.forEach(n=>adj[n]=[]);
+  edges.forEach(e=>{ if(adj[e.from]) adj[e.from].push(e.to); });
+  const paths=[];
+  const walk=(u, path)=>{
+    if(u===dst){ paths.push([...path,u]); return; }
+    for(const v of (adj[u]||[])){
+      if(!path.includes(v)) walk(v,[...path,u]);
+    }
+  };
+  walk(src,[]);
+  return paths;
+};
+
+// Get ancestors of a node
+const dagAncestors = (nodes, edges, target) => {
+  const parents = {}; nodes.forEach(n=>parents[n]=[]);
+  edges.forEach(e=>{ if(parents[e.to]) parents[e.to].push(e.from); });
+  const anc = new Set();
+  const walk=(u)=>{ for(const p of (parents[u]||[])){ if(!anc.has(p)){ anc.add(p); walk(p); } } };
+  walk(target);
+  return anc;
+};
+
+// Backdoor adjustment set: identify confounders to control for
+// A confounder is a common cause of both treatment (X) and outcome (Y)
+const dagBackdoorSet = (nodes, edges, treatment, outcome) => {
+  if(!treatment||!outcome||treatment===outcome) return {confounders:[], mediators:[], colliders:[], note:"Select distinct treatment (X) and outcome (Y)."};
+
+  const ancX = dagAncestors(nodes, edges, treatment);
+  const ancY = dagAncestors(nodes, edges, outcome);
+
+  // Confounders = common ancestors of X and Y (excluding X,Y themselves)
+  const confounders = [...ancX].filter(n=>ancY.has(n)&&n!==treatment&&n!==outcome);
+
+  // Mediators = nodes on directed path X -> ... -> Y (must NOT control)
+  const paths = dagPaths(nodes, edges, treatment, outcome);
+  const mediators = [...new Set(paths.flat().filter(n=>n!==treatment&&n!==outcome))];
+
+  // Colliders = nodes that are children of two variables on a path (must NOT control)
+  const childrenCount = {};
+  edges.forEach(e=>{ childrenCount[e.to]=(childrenCount[e.to]||0)+1; });
+  const colliders = nodes.filter(n=>childrenCount[n]>=2 && n!==treatment && n!==outcome && !confounders.includes(n) && !mediators.includes(n));
+
+  let note="";
+  if(confounders.length===0 && mediators.length===0){
+    note="No confounders found — the estimated effect of X on Y is unbiased (given this DAG).";
+  } else if(confounders.length>0){
+    note=`Control for ${confounders.length} confounder(s) to estimate the causal effect of X on Y. Do NOT control for mediators (they lie on the causal path).`;
+  } else {
+    note="X and Y are connected only through mediators. Controlling for them would block the causal effect.";
+  }
+  return {confounders, mediators, colliders, note, hasDirectPath:paths.length>0};
+};
+
+
 // ── Composite Index Builder ──────────────────────────────────────────────────
 const NORM_METHODS = [
   {id:"minmax", label:"Min-Max (0-100)",    formula:"(x-min)/(max-min)×100"},
@@ -2054,7 +2132,14 @@ function Dashboard({user, onLogout}) {
   const [compWeights,setCompWeights]=useState([1]);
   const [compNorm,setCompNorm]=useState("minmax");
   const [compAgg,setCompAgg]=useState("weighted_sum");
-  const [analysisTab,setAnalysisTab]=useState("transform"); // transform|impute|regression|composite
+  const [analysisTab,setAnalysisTab]=useState("transform");
+  // DAG causal analysis
+  const [dagEdges,setDagEdges]=useState([]); // [{from, to}]
+  const [dagTreatment,setDagTreatment]=useState(0); // index into basket
+  const [dagOutcome,setDagOutcome]=useState(1);
+  const [dagFrom,setDagFrom]=useState(0);
+  const [dagTo,setDagTo]=useState(1);
+  const [showDag,setShowDag]=useState(false); // transform|impute|regression|composite
 
   // Multi-variable data store
   const [multiData,setMultiData]=useState({});
@@ -2704,7 +2789,7 @@ function Dashboard({user, onLogout}) {
           {/* ANALYSIS TOOLS PANEL */}
           <div style={{borderTop:`1px solid ${C.border}`,flexShrink:0}}>
             <div style={{padding:"8px 12px 6px",display:"flex",gap:4,overflowX:"auto"}}>
-              {["transform","impute","composite","frequency"].map(t=>(
+              {["transform","impute","composite","frequency","dag"].map(t=>(
                 <button key={t} onClick={()=>setAnalysisTab(t)} style={{...pill(analysisTab===t,C.purple),fontSize:8,padding:"3px 7px",whiteSpace:"nowrap",textTransform:"capitalize",flexShrink:0}}>
                   {t==="transform"?"⟳":t==="impute"?"◎":t==="regression"?"↗":"⊕"} {t}
                 </button>
@@ -2777,6 +2862,78 @@ function Dashboard({user, onLogout}) {
                   <div style={{background:`${C.orange}12`,border:`1px solid ${C.orange}33`,borderRadius:7,padding:"7px 10px",marginTop:4}}>
                     <div style={{color:C.orange,fontSize:9,fontFamily:C.mono}}>⚠ Non-annual frequencies use linear interpolation between annual data points for most sources. FRED supports native monthly data.</div>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* DAG Causal Analysis */}
+            {analysisTab==="dag"&&(
+              <div style={{padding:"6px 12px 10px"}}>
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Causal DAG Builder</div>
+                {varBasket.length<2?(
+                  <div style={{color:C.red,fontSize:9,fontFamily:C.mono}}>Select ≥2 variables to build a causal graph</div>
+                ):(
+                  <>
+                    {/* Add edge */}
+                    <div style={{marginBottom:8}}>
+                      <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Add Causal Link (cause → effect)</div>
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        <select value={dagFrom} onChange={e=>setDagFrom(+e.target.value)} style={{...sel,fontSize:9,padding:"4px 6px",flex:1}}>
+                          {varBasket.map((item,i)=><option key={i} value={i}>{item.label.substring(0,14)}</option>)}
+                        </select>
+                        <span style={{color:C.purple,fontSize:12}}>→</span>
+                        <select value={dagTo} onChange={e=>setDagTo(+e.target.value)} style={{...sel,fontSize:9,padding:"4px 6px",flex:1}}>
+                          {varBasket.map((item,i)=><option key={i} value={i}>{item.label.substring(0,14)}</option>)}
+                        </select>
+                      </div>
+                      <button onClick={()=>{
+                        if(dagFrom===dagTo){return;}
+                        const fromLabel=varBasket[dagFrom]?.label; const toLabel=varBasket[dagTo]?.label;
+                        if(dagEdges.some(e=>e.from===fromLabel&&e.to===toLabel)) return;
+                        const newEdges=[...dagEdges,{from:fromLabel,to:toLabel}];
+                        // check for cycle
+                        const nodes=varBasket.map(v=>v.label);
+                        if(dagHasCycle(nodes,newEdges)){alert("That link would create a cycle — DAGs must be acyclic.");return;}
+                        setDagEdges(newEdges);
+                      }} style={{...btn(C.purple),width:"100%",padding:"6px",fontSize:9,marginTop:5,color:"#fff"}}>+ Add Link</button>
+                    </div>
+
+                    {/* Edge list */}
+                    {dagEdges.length>0&&(
+                      <div style={{marginBottom:8}}>
+                        <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Causal Links ({dagEdges.length})</div>
+                        {dagEdges.map((e,i)=>(
+                          <div key={i} style={{display:"flex",alignItems:"center",gap:4,padding:"3px 6px",marginBottom:3,background:`${C.purple}12`,borderRadius:5,fontSize:8,fontFamily:C.mono}}>
+                            <span style={{color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.from.substring(0,12)} → {e.to.substring(0,12)}</span>
+                            <button onClick={()=>setDagEdges(dagEdges.filter((_,j)=>j!==i))} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:11}}>×</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Treatment / Outcome for backdoor analysis */}
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:8,marginBottom:8}}>
+                      <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Effect of Interest</div>
+                      <div style={{marginBottom:5}}>
+                        <div style={{color:C.dim,fontSize:8,marginBottom:2}}>Treatment (X)</div>
+                        <select value={dagTreatment} onChange={e=>setDagTreatment(+e.target.value)} style={{...sel,fontSize:9,padding:"4px 6px"}}>
+                          {varBasket.map((item,i)=><option key={i} value={i}>{item.label.substring(0,18)}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{color:C.dim,fontSize:8,marginBottom:2}}>Outcome (Y)</div>
+                        <select value={dagOutcome} onChange={e=>setDagOutcome(+e.target.value)} style={{...sel,fontSize:9,padding:"4px 6px"}}>
+                          {varBasket.map((item,i)=><option key={i} value={i}>{item.label.substring(0,18)}</option>)}
+                        </select>
+                      </div>
+                    </div>
+
+                    <label style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",marginBottom:6}}>
+                      <input type="checkbox" checked={showDag} onChange={e=>setShowDag(e.target.checked)} style={{accentColor:C.purple}}/>
+                      <span style={{color:C.text,fontSize:11}}>Show DAG & Analysis</span>
+                    </label>
+                    <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,lineHeight:1.5}}>Draw your causal assumptions. The app identifies confounders to control for using backdoor criterion.</div>
+                  </>
                 )}
               </div>
             )}
@@ -2944,7 +3101,7 @@ function Dashboard({user, onLogout}) {
                 {source.keyRequired&&!settings.fredKey&&<span style={{color:C.red,fontSize:11}}>⚠ FRED API key required — add in Settings</span>}
               </div>
             ) : viewMode==="chart" ? (
-              <div id="ecoscope-chart-area">
+              <div id="ecoscope-chart-area" key={chartType}>
                 <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
               </div>
             ) : (
@@ -3017,6 +3174,99 @@ function Dashboard({user, onLogout}) {
               </div>
             )}
           </div>
+
+          {/* DAG CAUSAL ANALYSIS VIEW */}
+          {showDag&&varBasket.length>=2&&(()=>{
+            const nodes=varBasket.map(v=>v.label);
+            const tName=varBasket[dagTreatment]?.label;
+            const oName=varBasket[dagOutcome]?.label;
+            const analysis=dagBackdoorSet(nodes,dagEdges,tName,oName);
+            // Simple auto-layout: place nodes in a circle
+            const cx=300, cy=150, r=110;
+            const positions={};
+            nodes.forEach((n,i)=>{
+              const angle=(2*Math.PI*i/nodes.length)-Math.PI/2;
+              positions[n]={x:cx+r*Math.cos(angle),y:cy+r*Math.sin(angle)};
+            });
+            return(
+              <div style={{...card,background:T.card,border:`1px solid ${C.purple}44`}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+                  <div style={{width:22,height:22,background:`linear-gradient(135deg,${C.purple},${C.blue})`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>⚸</div>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>Causal DAG Analysis</h3>
+                </div>
+
+                {/* SVG DAG */}
+                <div style={{background:C.bg,borderRadius:10,padding:10,marginBottom:12,overflowX:"auto"}}>
+                  <svg viewBox="0 0 600 300" style={{width:"100%",minWidth:400,height:280}}>
+                    <defs>
+                      <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill={C.mid}/>
+                      </marker>
+                    </defs>
+                    {/* Edges */}
+                    {dagEdges.map((e,i)=>{
+                      const p1=positions[e.from], p2=positions[e.to];
+                      if(!p1||!p2) return null;
+                      const dx=p2.x-p1.x, dy=p2.y-p1.y;
+                      const len=Math.sqrt(dx*dx+dy*dy)||1;
+                      const ux=dx/len, uy=dy/len;
+                      const x1=p1.x+ux*32, y1=p1.y+uy*32;
+                      const x2=p2.x-ux*36, y2=p2.y-uy*36;
+                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={C.mid} strokeWidth={2} markerEnd="url(#arrow)"/>;
+                    })}
+                    {/* Nodes */}
+                    {nodes.map((n,i)=>{
+                      const p=positions[n];
+                      const isT=n===tName, isO=n===oName;
+                      const isConf=analysis.confounders.includes(n);
+                      const isMed=analysis.mediators.includes(n);
+                      const col=isT?C.gold:isO?C.teal:isConf?C.red:isMed?C.orange:C.blue;
+                      return(
+                        <g key={i}>
+                          <circle cx={p.x} cy={p.y} r={30} fill={`${col}22`} stroke={col} strokeWidth={2}/>
+                          <text x={p.x} y={p.y-2} textAnchor="middle" fill={col} fontSize={9} fontFamily="monospace" fontWeight="bold">{isT?"X":isO?"Y":n.substring(0,6)}</text>
+                          <text x={p.x} y={p.y+9} textAnchor="middle" fill={C.mid} fontSize={6} fontFamily="monospace">{n.substring(0,14)}</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+
+                {/* Legend */}
+                <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:12,fontSize:9,fontFamily:C.mono}}>
+                  <span style={{color:C.gold}}>● X = Treatment</span>
+                  <span style={{color:C.teal}}>● Y = Outcome</span>
+                  <span style={{color:C.red}}>● Confounder</span>
+                  <span style={{color:C.orange}}>● Mediator</span>
+                  <span style={{color:C.blue}}>● Other</span>
+                </div>
+
+                {/* Analysis result */}
+                <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"12px 14px"}}>
+                  <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:8}}>Backdoor Criterion Analysis</div>
+                  <div style={{color:C.text,fontSize:12,marginBottom:10,fontFamily:C.mono}}>Effect: <span style={{color:C.gold}}>{tName?.substring(0,20)}</span> → <span style={{color:C.teal}}>{oName?.substring(0,20)}</span></div>
+                  {analysis.confounders.length>0&&(
+                    <div style={{marginBottom:8}}>
+                      <div style={{color:C.red,fontSize:10,fontFamily:C.mono,fontWeight:700,marginBottom:4}}>⚠ Control for these confounders:</div>
+                      {analysis.confounders.map((c,i)=><div key={i} style={{color:C.text,fontSize:10,fontFamily:C.mono,paddingLeft:12}}>• {c}</div>)}
+                    </div>
+                  )}
+                  {analysis.mediators.length>0&&(
+                    <div style={{marginBottom:8}}>
+                      <div style={{color:C.orange,fontSize:10,fontFamily:C.mono,fontWeight:700,marginBottom:4}}>✗ Do NOT control (mediators — they carry the effect):</div>
+                      {analysis.mediators.map((m,i)=><div key={i} style={{color:C.mid,fontSize:10,fontFamily:C.mono,paddingLeft:12}}>• {m}</div>)}
+                    </div>
+                  )}
+                  <div style={{color:analysis.confounders.length>0?C.gold:C.teal,fontSize:11,fontFamily:C.mono,lineHeight:1.6,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>{analysis.note}</div>
+                  {analysis.confounders.length>0&&(
+                    <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,marginTop:8,lineHeight:1.5}}>
+                      Adjusted model: <span style={{color:C.text}}>{oName?.substring(0,15)} ~ {tName?.substring(0,15)} + {analysis.confounders.map(c=>c.substring(0,10)).join(" + ")}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* MISSING DATA TOAST */}
           {missingAlert&&(
