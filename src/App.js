@@ -1394,7 +1394,8 @@ function Login({onLogin}){
       if(res.error){setErr(res.error);return;}
       const initials=res.user.username.slice(0,2).toUpperCase();
       const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs(res.user.username.charCodeAt(0)||0)%5];
-      onLogin({...res.user,initials,avatarColor});
+      const role=res.user.role||(res.user.username==="admin"?"admin":"user");
+      onLogin({...res.user,initials,avatarColor,role});
     }
   };
 
@@ -2476,7 +2477,7 @@ function Dashboard({user, onLogout}) {
   };
 
   return (
-    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden",maxWidth:"100vw"}}>
+    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
 
       {/* HEADER */}
       <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
@@ -2500,7 +2501,7 @@ function Dashboard({user, onLogout}) {
               <span style={{color:C.mid,fontSize:8,marginLeft:2}}>{showUserMenu?"▲":"▼"}</span>
             </button>
             {showUserMenu&&(
-              <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:13,padding:"6px",minWidth:220,boxShadow:`0 16px 48px rgba(0,0,0,.7)`,zIndex:200}}>
+              <div style={{position:"fixed",top:60,right:isMobile?8:20,left:isMobile?8:"auto",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:13,padding:"6px",minWidth:isMobile?"auto":220,boxShadow:`0 16px 48px rgba(0,0,0,.7)`,zIndex:300}}>
                 {/* Signed in as */}
                 <div style={{padding:"10px 14px 10px",borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
@@ -3123,7 +3124,7 @@ export default function App() {
         const avatarColor=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a"][Math.abs((sess.username.charCodeAt(0)||0))%5];
         setUser({...sess,initials,avatarColor,
           settings:{defaultCountry:"GH",theme:"dark",fredKey:"",anthropicKey:""},
-          plan:sess.plan||"free",role:sess.role||"user"});
+          plan:sess.plan||"free",role:sess.role||(sess.username==="admin"?"admin":"user")});
       }
     }catch(_){}
     setBooting(false);
@@ -3134,8 +3135,8 @@ export default function App() {
       <div style={{color:"#f0a500",fontFamily:"monospace",fontSize:14}}>◈ Loading EcoScope…</div>
     </div>
   );
-  if(!user) return <Login onLogin={u=>{localStorage.setItem(US.SESS,JSON.stringify(u));setUser(u);}}/>;
-  if(user.role==="admin") return <AdminPanel user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/>;
+  if(!user) return <Login onLogin={u=>{const nu={...u,role:u.role||(u.username==="admin"?"admin":"user")};localStorage.setItem(US.SESS,JSON.stringify(nu));setUser(nu);}}/>;
+  if(user.role==="admin"||user.username==="admin") return <AdminPanel user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/>;
   return <ErrBoundary><Dashboard user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/></ErrBoundary>;
 }
 
@@ -3412,7 +3413,7 @@ function AdminPanel({user, onLogout}) {
       )}
 
       {/* HEADER */}
-      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10,gap:8,overflow:"hidden"}}>
+      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:20,gap:8}}>
         <div style={{display:"flex",alignItems:"center",gap:isMobile?8:12}}>
           {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:C.gold,border:"none",cursor:"pointer",padding:9,borderRadius:7,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/></button>}
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
@@ -3440,7 +3441,7 @@ function AdminPanel({user, onLogout}) {
               <span style={{color:C.mid,fontSize:8}}>{showUserMenu?"▲":"▼"}</span>
             </button>
             {showUserMenu&&(
-              <div style={{position:"absolute",top:"calc(100% + 8px)",right:0,background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:13,padding:"6px",minWidth:220,boxShadow:`0 16px 48px rgba(0,0,0,.7)`,zIndex:200}}>
+              <div style={{position:"fixed",top:60,right:isMobile?8:20,left:isMobile?8:"auto",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:13,padding:"6px",minWidth:isMobile?"auto":220,boxShadow:`0 16px 48px rgba(0,0,0,.7)`,zIndex:300}}>
                 <div style={{padding:"10px 14px 10px",borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}>
                     <div style={{width:34,height:34,borderRadius:"50%",background:user.avatarColor||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:"#000"}}>{user.initials||"A"}</div>
@@ -3449,7 +3450,7 @@ function AdminPanel({user, onLogout}) {
                   <div style={{background:`${C.gold}18`,border:`1px solid ${C.gold}44`,borderRadius:5,padding:"3px 9px",display:"inline-block"}}><span style={{color:C.gold,fontSize:9,fontFamily:C.mono,fontWeight:700}}>⬡ ADMINISTRATOR</span></div>
                 </div>
                 {[
-                  {icon:"◈",label:"Switch to Dashboard",action:()=>{onLogout();},special:true},
+                  {icon:"⬡",label:"Admin Home",action:()=>{setTab("overview");setShowUserMenu(false);},special:true},
                   null,
                   {icon:"⚙",label:"System Config",action:()=>{setTab("config");setShowUserMenu(false);}},
                   {icon:"👥",label:"User Management",action:()=>{setTab("users");setShowUserMenu(false);}},
@@ -3901,7 +3902,13 @@ function AdminPanel({user, onLogout}) {
         }
         }
       `}</style>
-      <style>{`*{box-sizing:border-box;margin:0;padding:0;}::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+        html,body{height:100%;width:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;}
+        #root{height:100%;width:100%;overflow:hidden;}
+        @media(max-width:768px){
+          table{font-size:10px!important;}
+        }::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
 
       {/* Invite Modal */}
       {showInvite&&<InviteModal onClose={()=>setShowInvite(false)} onDone={()=>{refresh();notify("User invited successfully");}}/>}
