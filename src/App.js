@@ -2788,10 +2788,10 @@ function Dashboard({user, onLogout}) {
 
           {/* ANALYSIS TOOLS PANEL */}
           <div style={{borderTop:`1px solid ${C.border}`,flexShrink:0}}>
-            <div style={{padding:"8px 12px 6px",display:"flex",gap:4,overflowX:"auto"}}>
+            <div style={{padding:"8px 12px 6px",display:"flex",gap:4,flexWrap:"wrap"}}>
               {["transform","impute","composite","frequency","dag"].map(t=>(
                 <button key={t} onClick={()=>setAnalysisTab(t)} style={{...pill(analysisTab===t,C.purple),fontSize:8,padding:"3px 7px",whiteSpace:"nowrap",textTransform:"capitalize",flexShrink:0}}>
-                  {t==="transform"?"⟳":t==="impute"?"◎":t==="regression"?"↗":"⊕"} {t}
+                  {t==="transform"?"⟳":t==="impute"?"◎":t==="composite"?"⊕":t==="frequency"?"◷":"⚸"} {t}
                 </button>
               ))}
             </div>
