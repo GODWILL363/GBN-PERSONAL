@@ -1375,6 +1375,44 @@ const buildComposite = (seriesList, weights, normMethod, aggMethod) => {
 };
 
 // ── Chart Export ─────────────────────────────────────────────────────────────
+
+// ── Download DAG graph as PNG or SVG ─────────────────────────────────────────
+const downloadDAG = (format) => {
+  const svg = document.getElementById("dag-svg");
+  if(!svg){ alert("No DAG to export — enable 'Show DAG & Analysis' first."); return; }
+  const W=600, H=300, PAD=30;
+  const inner=(new XMLSerializer().serializeToString(svg)).replace(/<svg[^>]*>/,'').replace('</svg>','');
+  const doc=`<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H+PAD}" viewBox="0 0 ${W} ${H+PAD}">
+  <rect width="${W}" height="${H+PAD}" fill="#05070f"/>
+  <text x="14" y="20" fill="#f0a500" font-size="12" font-weight="bold" font-family="Arial">EcoScope — Causal DAG</text>
+  <g transform="translate(0,${PAD})">${inner}</g>
+</svg>`;
+  if(format==="svg"){
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([doc],{type:"image/svg+xml;charset=utf-8"}));
+    a.download="ecoscope_dag.svg"; a.click(); return;
+  }
+  // PNG at 2x
+  const img=new Image();
+  const blob=new Blob([doc],{type:"image/svg+xml;charset=utf-8"});
+  const url=URL.createObjectURL(blob);
+  img.onload=()=>{
+    const c=document.createElement("canvas");
+    c.width=W*2; c.height=(H+PAD)*2;
+    const ctx=c.getContext("2d");
+    ctx.scale(2,2);
+    ctx.fillStyle="#05070f"; ctx.fillRect(0,0,W,H+PAD);
+    ctx.drawImage(img,0,0,W,H+PAD);
+    URL.revokeObjectURL(url);
+    const a=document.createElement("a");
+    a.href=c.toDataURL("image/png",1.0);
+    a.download="ecoscope_dag.png"; a.click();
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);alert("PNG export failed — try SVG.");};
+  img.src=url;
+};
+
 const exportChart = async (format, title) => {
   // Load html2canvas from CDN for reliable pixel-perfect capture
   const loadHtml2Canvas = () => new Promise((res,rej)=>{
@@ -1488,6 +1526,57 @@ const exportChart = async (format, title) => {
       w.document.close();
     }
   }
+};
+
+
+
+// ── CSV Import & Frequency Auto-Detection ────────────────────────────────────
+const parseCSV = (text) => {
+  const lines = text.trim().split(/\r?\n/).filter(l=>l.trim());
+  if(lines.length<2) return {error:"CSV needs a header row and at least one data row."};
+  const delim = lines[0].includes("\t")?"\t":(lines[0].includes(";")?";":",");
+  const headers = lines[0].split(delim).map(h=>h.trim().replace(/^["']|["']$/g,""));
+  const rows = lines.slice(1).map(l=>l.split(delim).map(c=>c.trim().replace(/^["']|["']$/g,"")));
+  return {headers, rows, delim};
+};
+
+// Auto-detect the time/date column and its frequency
+const detectTimeColumn = (headers, rows) => {
+  for(let c=0;c<headers.length;c++){
+    const h=headers[c].toLowerCase();
+    const vals=rows.map(r=>r[c]).filter(Boolean);
+    // Header name hints
+    const nameHint=/date|year|time|period|month|quarter|day/.test(h);
+    // Value pattern checks
+    const allYears=vals.every(v=>/^(19|20)\d{2}$/.test(v));
+    const allDates=vals.every(v=>/\d{4}-\d{2}(-\d{2})?/.test(v)||/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(v));
+    const hasQuarter=vals.some(v=>/Q[1-4]/i.test(v));
+    const hasMonth=vals.some(v=>/^\d{4}-\d{2}$/.test(v))||vals.some(v=>/jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(v));
+    if(nameHint||allYears||allDates||hasQuarter){
+      let freq="annual";
+      if(hasQuarter) freq="quarterly";
+      else if(hasMonth) freq="monthly";
+      else if(allDates&&!allYears) freq="daily";
+      return {col:c, freq, name:headers[c]};
+    }
+  }
+  return {col:0, freq:"annual", name:headers[0]}; // fallback: first column
+};
+
+// Convert imported CSV into EcoScope series format
+const csvToSeries = (headers, rows, timeCol) => {
+  const series={}; // {columnName: [{year, value}]}
+  headers.forEach((h,c)=>{
+    if(c===timeCol) return;
+    const data=[];
+    rows.forEach(r=>{
+      const t=r[timeCol];
+      const v=parseFloat(String(r[c]).replace(/[$,%\s]/g,""));
+      if(t&&!isNaN(v)) data.push({year:t, value:v});
+    });
+    if(data.length) series[h]=data;
+  });
+  return series;
 };
 
 
@@ -2215,6 +2304,11 @@ function Dashboard({user, onLogout}) {
   const [showDag,setShowDag]=useState(false);
   const [hiddenChartVars,setHiddenChartVars]=useState(new Set());
   const [unobservedNodes,setUnobservedNodes]=useState(new Set());
+  const [dagPositions,setDagPositions]=useState({});
+  const [dragNode,setDragNode]=useState(null);
+  // Data import
+  const [importedData,setImportedData]=useState(null); // {series:{name:[{year,value}]}, freq, timeName}
+  const [showImport,setShowImport]=useState(false);
   const [dagMode,setDagMode]=useState("manual"); // manual|auto
   const [dagThreshold,setDagThreshold]=useState(0.4);
   const [dagScores,setDagScores]=useState([]); // transform|impute|regression|composite
@@ -2252,7 +2346,9 @@ function Dashboard({user, onLogout}) {
 
   const _primarySrc0 = ALL_SRCS_MAP[varBasket[0]?.sourceId]||source;
   const currentVar = varBasket.length
-    ? (_primarySrc0.vars.find(v=>v.code===varBasket[0].varCode)||_primarySrc0.vars[0]||source.vars[0])
+    ? (varBasket[0].sourceId==="__imported__"
+        ? {code:varBasket[0].varCode, name:varBasket[0].label, fmt:"num", cat:"Imported"}
+        : (_primarySrc0.vars.find(v=>v.code===varBasket[0].varCode)||_primarySrc0.vars[0]||source.vars[0]))
     : source.vars[0];
 
   const filteredCountries = COUNTRIES.filter(c=>{
@@ -2284,6 +2380,10 @@ function Dashboard({user, onLogout}) {
 
     // Fetch each basket item from its own source
     const fetchBasketItem = async (item, countryCode) => {
+      // Imported CSV data
+      if(item.sourceId==="__imported__"){
+        return importedData?.series?.[item.varCode] || [];
+      }
       const src = ALL_SRCS_MAP[item.sourceId];
       if(!src) return [];
       const vd = src.vars.find(v=>v.code===item.varCode);
@@ -2322,7 +2422,7 @@ function Dashboard({user, onLogout}) {
     } else { setCmpData([]); setCmpMultiData({}); }
 
     setLoading(false);
-  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,imputeMethod,transform]);
+  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,appliedImpute,appliedTransform,importedData]);
 
   useEffect(()=>{loadData();},[loadData]);
   useEffect(()=>{setInsight("");setAiError("");},[sourceId,varCode,effCountry,startYear,endYear]);
@@ -2352,6 +2452,9 @@ function Dashboard({user, onLogout}) {
   const renderChart=()=>{
     // Build multi-variable chart data from basket
     const allVarDefs = varBasket.map(item=>{
+      if(item.sourceId==="__imported__"){
+        return {code:item.varCode,name:item.label,fmt:"num",cat:"Imported",_sourceId:"__imported__",_sourceColor:item.sourceColor,_sourceName:"CSV"};
+      }
       const src2=ALL_SRCS_MAP[item.sourceId];
       const vd=src2?.vars.find(v=>v.code===item.varCode);
       return vd?{...vd,_sourceId:item.sourceId,_sourceColor:item.sourceColor,_sourceName:item.sourceName}:null;
@@ -2724,6 +2827,12 @@ function Dashboard({user, onLogout}) {
         }}>
 
           {isMobile&&<div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"flex-end"}}><button onClick={()=>setSidebarOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"5px 12px",fontSize:12,fontFamily:C.mono}}>✕ Close</button></div>}
+          {/* IMPORT DATA BUTTON */}
+          <div style={{padding:"12px 10px 4px"}}>
+            <button onClick={()=>setShowImport(true)} style={{...btn(C.cyan),width:"100%",padding:"8px",fontSize:11,color:"#000"}}>⬆ Import Your Data</button>
+            {importedData&&<div style={{marginTop:6,padding:"6px 8px",background:`${C.cyan}12`,border:`1px solid ${C.cyan}33`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}><span style={{color:C.cyan,fontSize:9,fontFamily:C.mono}}>✓ {Object.keys(importedData.series).length} cols · {importedData.freq}</span><button onClick={()=>{setImportedData(null);}} style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:11}}>✕</button></div>}
+          </div>
+
           {/* DATA LEVEL TOGGLE */}
           <div style={{padding:"12px 10px 6px"}}>
             <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Data Level</div>
@@ -3328,23 +3437,57 @@ function Dashboard({user, onLogout}) {
             const tName=varBasket[dagTreatment]?.label;
             const oName=varBasket[dagOutcome]?.label;
             const analysis=dagBackdoorSet(nodes,dagEdges,tName,oName);
-            // Simple auto-layout: place nodes in a circle
+            // Auto-layout in circle, override with custom dragged positions
             const cx=300, cy=150, r=110;
             const positions={};
             nodes.forEach((n,i)=>{
-              const angle=(2*Math.PI*i/nodes.length)-Math.PI/2;
-              positions[n]={x:cx+r*Math.cos(angle),y:cy+r*Math.sin(angle)};
+              if(dagPositions[n]){ positions[n]=dagPositions[n]; }
+              else {
+                const angle=(2*Math.PI*i/nodes.length)-Math.PI/2;
+                positions[n]={x:cx+r*Math.cos(angle),y:cy+r*Math.sin(angle)};
+              }
             });
+            // SVG drag handlers
+            const svgPoint=(evt,svg)=>{
+              const pt=svg.createSVGPoint();
+              const touch=evt.touches?evt.touches[0]:evt;
+              pt.x=touch.clientX; pt.y=touch.clientY;
+              const ctm=svg.getScreenCTM();
+              if(!ctm) return {x:0,y:0};
+              const p=pt.matrixTransform(ctm.inverse());
+              return {x:p.x, y:p.y};
+            };
             return(
               <div style={{...card,background:T.card,border:`1px solid ${C.purple}44`}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
                   <div style={{width:22,height:22,background:`linear-gradient(135deg,${C.purple},${C.blue})`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>⚸</div>
                   <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>Causal DAG Analysis</h3>
+                  <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                    <button onClick={()=>downloadDAG("png")} style={{...pill(false),color:C.blue,borderColor:`${C.blue}44`,fontSize:9}}>📷 PNG</button>
+                    <button onClick={()=>downloadDAG("svg")} style={{...pill(false),color:C.teal,borderColor:`${C.teal}44`,fontSize:9}}>◈ SVG</button>
+                    <button onClick={()=>{setDagPositions({});}} style={{...pill(false),color:C.dim,fontSize:9}}>↺ Reset</button>
+                  </div>
                 </div>
 
                 {/* SVG DAG */}
                 <div style={{background:C.bg,borderRadius:10,padding:10,marginBottom:12,overflowX:"auto"}}>
-                  <svg viewBox="0 0 600 300" style={{width:"100%",minWidth:400,height:280}}>
+                  <svg id="dag-svg" viewBox="0 0 600 300" style={{width:"100%",minWidth:400,height:280,touchAction:"none"}}
+                    onMouseMove={(evt)=>{
+                      if(!dragNode) return;
+                      const svg=evt.currentTarget;
+                      const pt=svgPoint(evt,svg);
+                      setDagPositions(prev=>({...prev,[dragNode]:{x:pt.x,y:pt.y}}));
+                    }}
+                    onMouseUp={()=>setDragNode(null)}
+                    onMouseLeave={()=>setDragNode(null)}
+                    onTouchMove={(evt)=>{
+                      if(!dragNode) return;
+                      const svg=evt.currentTarget;
+                      const pt=svgPoint(evt,svg);
+                      setDagPositions(prev=>({...prev,[dragNode]:{x:pt.x,y:pt.y}}));
+                    }}
+                    onTouchEnd={()=>setDragNode(null)}
+                  >
                     <defs>
                       <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
                         <path d="M0,0 L0,6 L9,3 z" fill={C.mid}/>
@@ -3394,10 +3537,13 @@ function Dashboard({user, onLogout}) {
                       const isUnobs=unobservedNodes.has(n);
                       const col=isT?C.gold:isO?C.teal:isConf?C.red:isMed?C.orange:C.blue;
                       return(
-                        <g key={i} style={{cursor:"pointer"}} onClick={()=>{
-                          if(isT||isO) return; // can't mark X/Y as unobserved
-                          setUnobservedNodes(prev=>{const s=new Set(prev);if(s.has(n))s.delete(n);else s.add(n);return s;});
-                        }}>
+                        <g key={i} style={{cursor:dragNode===n?"grabbing":"grab"}}
+                          onMouseDown={(evt)=>{evt.stopPropagation();setDragNode(n);}}
+                          onTouchStart={(evt)=>{setDragNode(n);}}
+                          onDoubleClick={()=>{
+                            if(isT||isO) return;
+                            setUnobservedNodes(prev=>{const s=new Set(prev);if(s.has(n))s.delete(n);else s.add(n);return s;});
+                          }}>
                           <circle cx={p.x} cy={p.y} r={30} fill={isUnobs?"transparent":`${col}22`} stroke={col} strokeWidth={2} strokeDasharray={isUnobs?"5 3":"none"}/>
                           <text x={p.x} y={p.y-2} textAnchor="middle" fill={col} fontSize={9} fontFamily="monospace" fontWeight="bold">{isT?"X":isO?"Y":n.substring(0,6)}</text>
                           <text x={p.x} y={p.y+9} textAnchor="middle" fill={C.mid} fontSize={6} fontFamily="monospace">{n.substring(0,14)}</text>
@@ -3425,7 +3571,7 @@ function Dashboard({user, onLogout}) {
                     <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.orange} strokeWidth="2"/></svg><span style={{color:C.orange}}>Mediating path</span></span>
                     <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.mid} strokeWidth="2" strokeDasharray="4 2"/></svg><span style={{color:C.mid}}>Unobserved</span></span>
                   </div>
-                  <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,marginTop:6,fontStyle:"italic"}}>💡 Tap any node (except X/Y) to toggle it as unobserved — dashed border & lines indicate latent confounders you cannot control for.</div>
+                  <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,marginTop:6,fontStyle:"italic"}}>💡 Drag nodes to rearrange · Double-click a node (except X/Y) to mark it unobserved (dashed = latent confounder).</div>
                 </div>
 
                 {/* Analysis result */}
@@ -3537,6 +3683,55 @@ function Dashboard({user, onLogout}) {
       </div>
 
       {showSettings&&<Settings user={liveUser} settings={settings} onSave={ns=>{setSettings(ns);US.update(liveUser.username,{settings:ns}).catch(console.error);}} onClose={()=>setShowSettings(false)}/>}
+      {/* DATA IMPORT MODAL */}
+      {showImport&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,backdropFilter:"blur(6px)",padding:16}}>
+          <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:18,padding:"28px 32px",width:520,maxWidth:"100%",maxHeight:"85vh",overflowY:"auto",fontFamily:C.font}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+              <h2 style={{color:C.text,fontSize:16,fontWeight:800,margin:0}}>⬆ Import Your Data</h2>
+              <button onClick={()=>setShowImport(false)} style={{background:"none",border:"none",color:C.mid,cursor:"pointer",fontSize:18}}>✕</button>
+            </div>
+            <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,lineHeight:1.7,marginBottom:16}}>
+              Upload a CSV file. First column should be time (year, date, or quarter). Other columns are your variables. The app auto-detects frequency and lets you chart, transform, impute, build composites and DAGs from it.
+            </div>
+            <div style={{background:C.card,border:`1px dashed ${C.cyan}55`,borderRadius:10,padding:"24px",textAlign:"center",marginBottom:16}}>
+              <input type="file" accept=".csv,.tsv,.txt" id="csv-upload" style={{display:"none"}} onChange={(e)=>{
+                const file=e.target.files?.[0]; if(!file) return;
+                const reader=new FileReader();
+                reader.onload=(ev)=>{
+                  const text=ev.target.result;
+                  const parsed=parseCSV(text);
+                  if(parsed.error){alert(parsed.error);return;}
+                  const timeInfo=detectTimeColumn(parsed.headers,parsed.rows);
+                  const series=csvToSeries(parsed.headers,parsed.rows,timeInfo.col);
+                  if(Object.keys(series).length===0){alert("No numeric data columns found.");return;}
+                  setImportedData({series,freq:timeInfo.freq,timeName:timeInfo.name});
+                  setFreq(timeInfo.freq==="daily"?"monthly":timeInfo.freq);
+                  // Auto-populate the basket with imported columns (up to max)
+                  const maxV=plan.aiInsights?10:4;
+                  const cols=Object.keys(series).slice(0,maxV);
+                  setVarBasket(cols.map((name,i)=>({sourceId:"__imported__",varCode:name,label:name,fmt:"num",sourceColor:ACCENT[i%ACCENT.length],sourceName:"CSV"})));
+                  setShowImport(false);
+                };
+                reader.readAsText(file);
+              }}/>
+              <label htmlFor="csv-upload" style={{cursor:"pointer",display:"block"}}>
+                <div style={{fontSize:36,marginBottom:10}}>📄</div>
+                <div style={{color:C.cyan,fontSize:13,fontWeight:700,marginBottom:4}}>Click to choose CSV file</div>
+                <div style={{color:C.dim,fontSize:10,fontFamily:C.mono}}>or drag & drop · .csv .tsv .txt</div>
+              </label>
+            </div>
+            <div style={{background:`${C.gold}0e`,border:`1px solid ${C.gold}33`,borderRadius:8,padding:"10px 12px"}}>
+              <div style={{color:C.gold,fontSize:9,fontFamily:C.mono,marginBottom:4}}>Example format:</div>
+              <pre style={{color:C.mid,fontSize:9,fontFamily:C.mono,margin:0,lineHeight:1.5}}>{`Year,GDP,Inflation,Unemployment
+2018,65.5,7.8,6.2
+2019,68.3,8.4,6.5
+2020,70.1,9.9,7.1`}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+
       {upgradeModal&&<UpgradeModal feature={upgradeModal.feature} requiredPlan={upgradeModal.requiredPlan||"pro"} onClose={()=>setUpgradeModal(null)} onUpgrade={()=>{setUpgradeModal(null);setShowUpgradeReq(true);}}/>}
       {showUpgradeReq&&<UpgradeRequestModal user={liveUser} currentPlan={liveUser.plan||"free"} onClose={()=>setShowUpgradeReq(false)}/>}
 
