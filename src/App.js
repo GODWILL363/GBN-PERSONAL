@@ -1267,6 +1267,79 @@ const dagBackdoorSet = (nodes, edges, treatment, outcome) => {
 };
 
 
+
+// ── Granger Causal Discovery (auto-generate DAG from time-series data) ────────
+// Pearson correlation
+const _pearson = (a, b) => {
+  const n=Math.min(a.length,b.length);
+  if(n<3) return 0;
+  const xa=a.slice(0,n), xb=b.slice(0,n);
+  const ma=xa.reduce((s,v)=>s+v,0)/n, mb=xb.reduce((s,v)=>s+v,0)/n;
+  let num=0,da=0,db=0;
+  for(let i=0;i<n;i++){const dx=xa[i]-ma,dy=xb[i]-mb;num+=dx*dy;da+=dx*dx;db+=dy*dy;}
+  const den=Math.sqrt(da*db);
+  return den?num/den:0;
+};
+
+// Align two series by common years, return paired value arrays
+const _alignSeries = (s1, s2) => {
+  const m2={}; s2.forEach(d=>{if(d.value!=null)m2[d.year]=d.value;});
+  const x=[],y=[],years=[];
+  s1.forEach(d=>{ if(d.value!=null&&m2[d.year]!=null){x.push(d.value);y.push(m2[d.year]);years.push(d.year);} });
+  return {x,y,years};
+};
+
+// Granger-style test: does X's past predict Y's present better than reverse?
+// Returns {xToY, yToX} strength scores (lagged correlations)
+const _grangerScore = (sx, sy) => {
+  const {x,y,years} = _alignSeries(sx, sy);
+  if(x.length<5) return {xToY:0, yToX:0};
+  // Sort by year to ensure temporal order
+  const idx=years.map((yr,i)=>i).sort((a,b)=>years[a]-years[b]);
+  const X=idx.map(i=>x[i]), Y=idx.map(i=>y[i]);
+  // Lag-1: correlate X[t-1] with Y[t]  (X causes Y)
+  const xPast=X.slice(0,-1), yPres=Y.slice(1);
+  const yPast=Y.slice(0,-1), xPres=X.slice(1);
+  const xToY=Math.abs(_pearson(xPast, yPres));
+  const yToX=Math.abs(_pearson(yPast, xPres));
+  return {xToY, yToX};
+};
+
+// Auto-discover DAG structure from basket data
+// nodes: array of variable labels; seriesMap: {label: [{year,value}]}
+const discoverDAG = (nodes, seriesMap, threshold=0.4) => {
+  const edges=[];
+  const scores=[];
+  for(let i=0;i<nodes.length;i++){
+    for(let j=i+1;j<nodes.length;j++){
+      const a=nodes[i], b=nodes[j];
+      const sa=seriesMap[a]||[], sb=seriesMap[b]||[];
+      const g=_grangerScore(sa, sb);
+      const contemp=Math.abs(_pearson(_alignSeries(sa,sb).x, _alignSeries(sa,sb).y));
+      // Only add edge if contemporaneous correlation is meaningful
+      if(contemp>=threshold){
+        // Orient by stronger Granger direction
+        if(g.xToY>=g.yToX){
+          edges.push({from:a, to:b, strength:contemp, granger:g.xToY});
+          scores.push({pair:`${a}→${b}`, corr:contemp, granger:g.xToY});
+        } else {
+          edges.push({from:b, to:a, strength:contemp, granger:g.yToX});
+          scores.push({pair:`${b}→${a}`, corr:contemp, granger:g.yToX});
+        }
+      }
+    }
+  }
+  // Remove edges that create cycles (keep stronger ones first)
+  edges.sort((a,b)=>b.strength-a.strength);
+  const kept=[];
+  for(const e of edges){
+    const test=[...kept, e];
+    if(!dagHasCycle(nodes, test)) kept.push(e);
+  }
+  return {edges:kept.map(e=>({from:e.from,to:e.to})), scores};
+};
+
+
 // ── Composite Index Builder ──────────────────────────────────────────────────
 const NORM_METHODS = [
   {id:"minmax", label:"Min-Max (0-100)",    formula:"(x-min)/(max-min)×100"},
@@ -2139,7 +2212,10 @@ function Dashboard({user, onLogout}) {
   const [dagOutcome,setDagOutcome]=useState(1);
   const [dagFrom,setDagFrom]=useState(0);
   const [dagTo,setDagTo]=useState(1);
-  const [showDag,setShowDag]=useState(false); // transform|impute|regression|composite
+  const [showDag,setShowDag]=useState(false);
+  const [dagMode,setDagMode]=useState("manual"); // manual|auto
+  const [dagThreshold,setDagThreshold]=useState(0.4);
+  const [dagScores,setDagScores]=useState([]); // transform|impute|regression|composite
 
   // Multi-variable data store
   const [multiData,setMultiData]=useState({});
@@ -2789,9 +2865,22 @@ function Dashboard({user, onLogout}) {
           {/* ANALYSIS TOOLS PANEL */}
           <div style={{borderTop:`1px solid ${C.border}`,flexShrink:0}}>
             <div style={{padding:"8px 12px 6px",display:"flex",gap:4,flexWrap:"wrap"}}>
-              {["transform","impute","composite","frequency","dag"].map(t=>(
-                <button key={t} onClick={()=>setAnalysisTab(t)} style={{...pill(analysisTab===t,C.purple),fontSize:8,padding:"3px 7px",whiteSpace:"nowrap",textTransform:"capitalize",flexShrink:0}}>
-                  {t==="transform"?"⟳":t==="impute"?"◎":t==="composite"?"⊕":t==="frequency"?"◷":"⚸"} {t}
+              {[
+                {id:"transform",icon:"⟳",color:C.gold},
+                {id:"impute",icon:"◎",color:C.teal},
+                {id:"composite",icon:"⊕",color:C.purple},
+                {id:"frequency",icon:"◷",color:C.blue},
+                {id:"dag",icon:"⚸",color:C.cyan},
+              ].map(t=>(
+                <button key={t.id} onClick={()=>setAnalysisTab(t.id)} style={{
+                  fontSize:8,padding:"4px 8px",whiteSpace:"nowrap",textTransform:"capitalize",flexShrink:0,
+                  borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontWeight:analysisTab===t.id?700:400,
+                  border:`1px solid ${analysisTab===t.id?t.color:C.border}`,
+                  background:analysisTab===t.id?`${t.color}22`:"transparent",
+                  color:analysisTab===t.id?t.color:C.mid,
+                  transition:"all .15s",
+                }}>
+                  <span style={{color:t.color}}>{t.icon}</span> {t.id}
                 </button>
               ))}
             </div>
@@ -2870,12 +2959,40 @@ function Dashboard({user, onLogout}) {
             {analysisTab==="dag"&&(
               <div style={{padding:"6px 12px 10px"}}>
                 <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Causal DAG Builder</div>
+                {/* Mode toggle */}
+                {varBasket.length>=2&&(
+                  <div style={{display:"flex",gap:4,marginBottom:8}}>
+                    <button onClick={()=>setDagMode("manual")} style={{...pill(dagMode==="manual",C.purple),flex:1,textAlign:"center",fontSize:9,padding:"5px"}}>✍ Manual</button>
+                    <button onClick={()=>setDagMode("auto")} style={{...pill(dagMode==="auto",C.cyan),flex:1,textAlign:"center",fontSize:9,padding:"5px"}}>🔍 Auto-Discover</button>
+                  </div>
+                )}
+                {/* Auto-discover controls */}
+                {varBasket.length>=2&&dagMode==="auto"&&(
+                  <div style={{marginBottom:10,padding:"8px 10px",background:`${C.cyan}0e`,border:`1px solid ${C.cyan}33`,borderRadius:8}}>
+                    <div style={{color:C.cyan,fontSize:9,fontFamily:C.mono,marginBottom:6}}>Granger Causal Discovery</div>
+                    <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:6}}>Correlation threshold: {dagThreshold.toFixed(2)}</div>
+                    <input type="range" min={0.2} max={0.9} step={0.05} value={dagThreshold} onChange={e=>setDagThreshold(+e.target.value)} style={{width:"100%",accentColor:C.cyan,marginBottom:8}}/>
+                    <button onClick={()=>{
+                      const nodes=varBasket.map(v=>v.label);
+                      const seriesMap={};
+                      varBasket.forEach(item=>{
+                        const dk=`${item.sourceId}:${item.varCode}`;
+                        seriesMap[item.label]=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
+                      });
+                      const result=discoverDAG(nodes,seriesMap,dagThreshold);
+                      setDagEdges(result.edges);
+                      setDagScores(result.scores);
+                      setShowDag(true);
+                    }} style={{...btn(C.cyan),width:"100%",padding:"7px",fontSize:10,color:"#000"}}>🔍 Discover Causal Structure</button>
+                    <div style={{color:C.dim,fontSize:7,fontFamily:C.mono,marginTop:6,lineHeight:1.5}}>Uses lagged correlations (Granger method) to infer edge directions from your data. You can edit the result manually afterward.</div>
+                  </div>
+                )}
                 {varBasket.length<2?(
                   <div style={{color:C.red,fontSize:9,fontFamily:C.mono}}>Select ≥2 variables to build a causal graph</div>
                 ):(
                   <>
-                    {/* Add edge */}
-                    <div style={{marginBottom:8}}>
+                    {/* Add edge - manual mode only */}
+                    {dagMode==="manual"&&<div style={{marginBottom:8}}>
                       <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Add Causal Link (cause → effect)</div>
                       <div style={{display:"flex",gap:4,alignItems:"center"}}>
                         <select value={dagFrom} onChange={e=>setDagFrom(+e.target.value)} style={{...sel,fontSize:9,padding:"4px 6px",flex:1}}>
@@ -2896,7 +3013,7 @@ function Dashboard({user, onLogout}) {
                         if(dagHasCycle(nodes,newEdges)){alert("That link would create a cycle — DAGs must be acyclic.");return;}
                         setDagEdges(newEdges);
                       }} style={{...btn(C.purple),width:"100%",padding:"6px",fontSize:9,marginTop:5,color:"#fff"}}>+ Add Link</button>
-                    </div>
+                    </div>}
 
                     {/* Edge list */}
                     {dagEdges.length>0&&(
@@ -3264,6 +3381,22 @@ function Dashboard({user, onLogout}) {
                     </div>
                   )}
                 </div>
+                {/* Discovery scores */}
+                {dagScores.length>0&&(
+                  <div style={{background:`${C.cyan}0e`,border:`1px solid ${C.cyan}33`,borderRadius:9,padding:"12px 14px",marginTop:10}}>
+                    <div style={{color:C.cyan,fontSize:9,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:8}}>🔍 Discovered Edge Strengths</div>
+                    {dagScores.sort((a,b)=>b.corr-a.corr).map((s,i)=>(
+                      <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5,fontSize:10,fontFamily:C.mono}}>
+                        <span style={{color:C.text,flex:1}}>{s.pair}</span>
+                        <div style={{width:80,height:6,background:C.border,borderRadius:3,overflow:"hidden"}}>
+                          <div style={{width:`${s.corr*100}%`,height:"100%",background:C.cyan}}/>
+                        </div>
+                        <span style={{color:C.cyan,width:36,textAlign:"right"}}>{s.corr.toFixed(2)}</span>
+                      </div>
+                    ))}
+                    <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,marginTop:6}}>Correlation strength · direction from Granger lag test</div>
+                  </div>
+                )}
               </div>
             );
           })()}
