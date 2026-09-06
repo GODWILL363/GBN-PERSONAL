@@ -158,7 +158,7 @@ const C = {
   text:"#dde3f5", mid:"#7a88b0", dim:"#3a4565",
   font:"'Syne',sans-serif", mono:"'IBM Plex Mono',monospace",
 };
-const ACCENT = ["#f0a500","#00c9a7","#4f8cff","#ff4c6a","#b05cff","#ff8c42","#00d4e8"];
+const ACCENT=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a","#ff8c42","#00d4e8","#7ed957","#ff5cf0","#ffd93d","#5c7cff","#ff8fa3","#4dd0e1","#c77dff"];
 
 // ══════════════════════════════════════════════
 // THEMES
@@ -2213,6 +2213,7 @@ function Dashboard({user, onLogout}) {
   const [dagFrom,setDagFrom]=useState(0);
   const [dagTo,setDagTo]=useState(1);
   const [showDag,setShowDag]=useState(false);
+  const [hiddenChartVars,setHiddenChartVars]=useState(new Set());
   const [dagMode,setDagMode]=useState("manual"); // manual|auto
   const [dagThreshold,setDagThreshold]=useState(0.4);
   const [dagScores,setDagScores]=useState([]); // transform|impute|regression|composite
@@ -2762,7 +2763,7 @@ function Dashboard({user, onLogout}) {
           {varBasket.length>0&&(
             <div style={{borderTop:`1px solid ${C.border}`,padding:"8px 10px",flexShrink:0,background:`${C.purple}06`}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                <div style={{fontSize:9,color:C.purple,fontFamily:C.mono,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700}}>⊕ Variable Basket ({varBasket.length}/4)</div>
+                <div style={{fontSize:9,color:C.purple,fontFamily:C.mono,letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:700}}>⊕ Variable Basket ({varBasket.length}/{plan.aiInsights?10:4})</div>
                 {varBasket.length>1&&<button onClick={()=>setVarBasket(vb=>vb.slice(0,1))} style={{background:"none",border:"none",color:C.red,fontSize:9,cursor:"pointer",fontFamily:C.mono}}>Clear</button>}
               </div>
               {varBasket.map((item,i)=>(
@@ -2801,7 +2802,7 @@ function Dashboard({user, onLogout}) {
                         if(inBasket){
                           if(varBasket.length>1) setVarBasket(vb=>vb.filter(b=>!(b.sourceId===source.id&&b.varCode===v.code)));
                         } else {
-                          if(varBasket.length>=4){setUpgradeModal({feature:"Maximum 4 variables — upgrade for more analysis",requiredPlan:"pro"});return;}
+                          const maxVars=plan.aiInsights?10:4; if(varBasket.length>=maxVars){setUpgradeModal({feature:`Maximum ${maxVars} variables reached`,requiredPlan:"pro"});return;}
                           if(varBasket.length>=1&&!plan.compare){setUpgradeModal({feature:"Multi-variable analysis requires Pro",requiredPlan:"pro"});return;}
                           setVarBasket(vb=>[...vb,{sourceId:source.id,varCode:v.code,label:v.name,fmt:v.fmt,sourceColor:source.color,sourceName:source.short}]);
                         }
@@ -3218,8 +3219,36 @@ function Dashboard({user, onLogout}) {
                 {source.keyRequired&&!settings.fredKey&&<span style={{color:C.red,fontSize:11}}>⚠ FRED API key required — add in Settings</span>}
               </div>
             ) : viewMode==="chart" ? (
-              <div id="ecoscope-chart-area" key={chartType}>
+              <div>
+                {/* Series show/hide toggles - only when >1 variable */}
+                {varBasket.length>1&&(
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:10,padding:"8px 10px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+                    <span style={{color:C.dim,fontSize:8,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",width:"100%",marginBottom:2}}>Chart Series ({varBasket.length-hiddenChartVars.size}/{varBasket.length} shown)</span>
+                    {varBasket.map((item,i)=>{
+                      const dk=`${item.sourceId}:${item.varCode}`;
+                      const hidden=hiddenChartVars.has(dk);
+                      const col=ACCENT[i%ACCENT.length];
+                      return(
+                        <button key={dk} onClick={()=>{
+                          setHiddenChartVars(prev=>{const n=new Set(prev);if(n.has(dk))n.delete(dk);else n.add(dk);return n;});
+                        }} style={{
+                          display:"flex",alignItems:"center",gap:5,padding:"4px 9px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,
+                          border:`1px solid ${hidden?C.border:col}`,
+                          background:hidden?"transparent":`${col}18`,
+                          color:hidden?C.dim:col,
+                          textDecoration:hidden?"line-through":"none",
+                          opacity:hidden?0.5:1,
+                        }}>
+                          <span style={{width:8,height:8,borderRadius:"50%",background:hidden?C.dim:col,flexShrink:0}}/>
+                          {item.label.substring(0,16)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()}>
                 <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
+              </div>
               </div>
             ) : (
               <div style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
