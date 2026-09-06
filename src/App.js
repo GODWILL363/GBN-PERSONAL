@@ -2214,6 +2214,7 @@ function Dashboard({user, onLogout}) {
   const [dagTo,setDagTo]=useState(1);
   const [showDag,setShowDag]=useState(false);
   const [hiddenChartVars,setHiddenChartVars]=useState(new Set());
+  const [unobservedNodes,setUnobservedNodes]=useState(new Set());
   const [dagMode,setDagMode]=useState("manual"); // manual|auto
   const [dagThreshold,setDagThreshold]=useState(0.4);
   const [dagScores,setDagScores]=useState([]); // transform|impute|regression|composite
@@ -3348,8 +3349,17 @@ function Dashboard({user, onLogout}) {
                       <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
                         <path d="M0,0 L0,6 L9,3 z" fill={C.mid}/>
                       </marker>
+                      <marker id="arrowTeal" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill={C.teal}/>
+                      </marker>
+                      <marker id="arrowRed" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill={C.red}/>
+                      </marker>
+                      <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+                        <path d="M0,0 L0,6 L9,3 z" fill={C.orange}/>
+                      </marker>
                     </defs>
-                    {/* Edges */}
+                    {/* Edges - color-coded by causal role */}
                     {dagEdges.map((e,i)=>{
                       const p1=positions[e.from], p2=positions[e.to];
                       if(!p1||!p2) return null;
@@ -3358,7 +3368,22 @@ function Dashboard({user, onLogout}) {
                       const ux=dx/len, uy=dy/len;
                       const x1=p1.x+ux*32, y1=p1.y+uy*32;
                       const x2=p2.x-ux*36, y2=p2.y-uy*36;
-                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2} stroke={C.mid} strokeWidth={2} markerEnd="url(#arrow)"/>;
+                      // Determine edge role
+                      const isDirect=(e.from===tName&&e.to===oName); // direct X→Y causal effect
+                      const fromConf=analysis.confounders.includes(e.from); // edge originates from confounder
+                      const toXY=(e.to===tName||e.to===oName);
+                      const isConfEdge=fromConf&&toXY; // confounder → X or Y (backdoor path)
+                      const isMedEdge=analysis.mediators.includes(e.from)||analysis.mediators.includes(e.to); // mediator edge
+                      const isUnobserved=unobservedNodes.has(e.from)||unobservedNodes.has(e.to);
+                      // Color logic
+                      let edgeColor=C.mid, marker="url(#arrow)";
+                      if(isDirect){edgeColor=C.teal;marker="url(#arrowTeal)";}
+                      else if(isConfEdge){edgeColor=C.red;marker="url(#arrowRed)";}
+                      else if(isMedEdge){edgeColor=C.orange;marker="url(#arrowOrange)";}
+                      return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+                        stroke={edgeColor} strokeWidth={isDirect?3:2}
+                        strokeDasharray={isUnobserved?"6 4":"none"}
+                        markerEnd={marker}/>;
                     })}
                     {/* Nodes */}
                     {nodes.map((n,i)=>{
@@ -3366,12 +3391,17 @@ function Dashboard({user, onLogout}) {
                       const isT=n===tName, isO=n===oName;
                       const isConf=analysis.confounders.includes(n);
                       const isMed=analysis.mediators.includes(n);
+                      const isUnobs=unobservedNodes.has(n);
                       const col=isT?C.gold:isO?C.teal:isConf?C.red:isMed?C.orange:C.blue;
                       return(
-                        <g key={i}>
-                          <circle cx={p.x} cy={p.y} r={30} fill={`${col}22`} stroke={col} strokeWidth={2}/>
+                        <g key={i} style={{cursor:"pointer"}} onClick={()=>{
+                          if(isT||isO) return; // can't mark X/Y as unobserved
+                          setUnobservedNodes(prev=>{const s=new Set(prev);if(s.has(n))s.delete(n);else s.add(n);return s;});
+                        }}>
+                          <circle cx={p.x} cy={p.y} r={30} fill={isUnobs?"transparent":`${col}22`} stroke={col} strokeWidth={2} strokeDasharray={isUnobs?"5 3":"none"}/>
                           <text x={p.x} y={p.y-2} textAnchor="middle" fill={col} fontSize={9} fontFamily="monospace" fontWeight="bold">{isT?"X":isO?"Y":n.substring(0,6)}</text>
                           <text x={p.x} y={p.y+9} textAnchor="middle" fill={C.mid} fontSize={6} fontFamily="monospace">{n.substring(0,14)}</text>
+                          {isUnobs&&<text x={p.x} y={p.y+20} textAnchor="middle" fill={C.dim} fontSize={5} fontFamily="monospace">unobserved</text>}
                         </g>
                       );
                     })}
@@ -3379,12 +3409,23 @@ function Dashboard({user, onLogout}) {
                 </div>
 
                 {/* Legend */}
-                <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:12,fontSize:9,fontFamily:C.mono}}>
-                  <span style={{color:C.gold}}>● X = Treatment</span>
-                  <span style={{color:C.teal}}>● Y = Outcome</span>
-                  <span style={{color:C.red}}>● Confounder</span>
-                  <span style={{color:C.orange}}>● Mediator</span>
-                  <span style={{color:C.blue}}>● Other</span>
+                <div style={{marginBottom:12}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:6,fontSize:9,fontFamily:C.mono}}>
+                    <span style={{color:C.dim,fontSize:8,textTransform:"uppercase"}}>Nodes:</span>
+                    <span style={{color:C.gold}}>● X Treatment</span>
+                    <span style={{color:C.teal}}>● Y Outcome</span>
+                    <span style={{color:C.red}}>● Confounder</span>
+                    <span style={{color:C.orange}}>● Mediator</span>
+                    <span style={{color:C.blue}}>● Other</span>
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:12,fontSize:9,fontFamily:C.mono,alignItems:"center"}}>
+                    <span style={{color:C.dim,fontSize:8,textTransform:"uppercase"}}>Edges:</span>
+                    <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.teal} strokeWidth="3"/></svg><span style={{color:C.teal}}>Direct effect</span></span>
+                    <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.red} strokeWidth="2"/></svg><span style={{color:C.red}}>Backdoor (confounder)</span></span>
+                    <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.orange} strokeWidth="2"/></svg><span style={{color:C.orange}}>Mediating path</span></span>
+                    <span style={{display:"flex",alignItems:"center",gap:4}}><svg width="24" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke={C.mid} strokeWidth="2" strokeDasharray="4 2"/></svg><span style={{color:C.mid}}>Unobserved</span></span>
+                  </div>
+                  <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,marginTop:6,fontStyle:"italic"}}>💡 Tap any node (except X/Y) to toggle it as unobserved — dashed border & lines indicate latent confounders you cannot control for.</div>
                 </div>
 
                 {/* Analysis result */}
@@ -3403,10 +3444,21 @@ function Dashboard({user, onLogout}) {
                       {analysis.mediators.map((m,i)=><div key={i} style={{color:C.mid,fontSize:10,fontFamily:C.mono,paddingLeft:12}}>• {m}</div>)}
                     </div>
                   )}
-                  <div style={{color:analysis.confounders.length>0?C.gold:C.teal,fontSize:11,fontFamily:C.mono,lineHeight:1.6,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>{analysis.note}</div>
+                  {(()=>{
+                    const unobsConf=analysis.confounders.filter(c=>unobservedNodes.has(c));
+                    return(<>
+                      {unobsConf.length>0&&(
+                        <div style={{background:`${C.red}15`,border:`1px solid ${C.red}44`,borderRadius:7,padding:"8px 12px",marginTop:8,marginBottom:8}}>
+                          <div style={{color:C.red,fontSize:10,fontFamily:C.mono,fontWeight:700,marginBottom:3}}>⚠ Unobserved confounder(s): {unobsConf.join(", ")}</div>
+                          <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,lineHeight:1.5}}>These cannot be controlled for because they're not measured. The causal effect of X on Y is <strong style={{color:C.red}}>not identifiable</strong> from this data alone — consider an instrumental variable or natural experiment.</div>
+                        </div>
+                      )}
+                      <div style={{color:analysis.confounders.length>0?C.gold:C.teal,fontSize:11,fontFamily:C.mono,lineHeight:1.6,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>{analysis.note}</div>
+                    </>);
+                  })()}
                   {analysis.confounders.length>0&&(
                     <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,marginTop:8,lineHeight:1.5}}>
-                      Adjusted model: <span style={{color:C.text}}>{oName?.substring(0,15)} ~ {tName?.substring(0,15)} + {analysis.confounders.map(c=>c.substring(0,10)).join(" + ")}</span>
+                      Adjusted model: <span style={{color:C.text}}>{oName?.substring(0,15)} ~ {tName?.substring(0,15)}{analysis.confounders.filter(c=>!unobservedNodes.has(c)).length>0?" + "+analysis.confounders.filter(c=>!unobservedNodes.has(c)).map(c=>c.substring(0,10)).join(" + "):""}</span>
                     </div>
                   )}
                 </div>
