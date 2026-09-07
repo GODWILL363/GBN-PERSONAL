@@ -2811,12 +2811,12 @@ function Dashboard({user, onLogout}) {
       const curveScaled=curve.map(c=>({bin:c.x,normal:(c.density/maxDens)*maxFreq}));
       return(
         <div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:14,marginBottom:10,padding:"8px 12px",background:C.surface,borderRadius:8,fontFamily:C.mono,fontSize:10}}>
-            <span style={{color:ACCENT[0],fontWeight:700}}>{vd.name.substring(0,24)}</span>
-            <span><span style={{color:C.dim}}>μ=</span>{fmtVal(s.mean,vd.fmt)}</span>
-            <span><span style={{color:C.dim}}>σ=</span>{fmtVal(s.std,vd.fmt)}</span>
-            <span><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(2)}</span></span>
-            <span style={{color:Math.abs(s.skew)<0.5?C.teal:C.orange,fontSize:9}}>{Math.abs(s.skew)<0.5?"≈ Normal":s.skew>0?"Right-skewed":"Left-skewed"}</span>
+          <div style={{display:"flex",flexWrap:"nowrap",alignItems:"center",gap:10,marginBottom:10,padding:"7px 12px",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,fontFamily:C.mono,fontSize:10,overflowX:"auto",whiteSpace:"nowrap"}}>
+            <span style={{color:ACCENT[0],fontWeight:700,flexShrink:0}}>{vd.name.substring(0,20)}</span>
+            <span style={{flexShrink:0}}><span style={{color:C.dim}}>μ=</span><span style={{color:C.text}}>{fmtVal(s.mean,vd.fmt)}</span></span>
+            <span style={{flexShrink:0}}><span style={{color:C.dim}}>σ=</span><span style={{color:C.text}}>{fmtVal(s.std,vd.fmt)}</span></span>
+            <span style={{flexShrink:0}}><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(3)}</span></span>
+            <span style={{padding:"2px 8px",borderRadius:4,fontSize:8,fontWeight:700,flexShrink:0,background:Math.abs(s.skew)<0.5?`${C.teal}18`:`${C.orange}18`,color:Math.abs(s.skew)<0.5?C.teal:C.orange}}>{Math.abs(s.skew)<0.5?"≈ Normal":s.skew>0?"Right-skewed":"Left-skewed"}</span>
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <ComposedChart margin={{top:10,right:16,left:0,bottom:10}}>
@@ -3510,7 +3510,7 @@ function Dashboard({user, onLogout}) {
                     })}
                   </div>
                 )}
-              <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()}>
+              <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()} style={{overflow:"hidden",maxWidth:"100%"}}>
                 <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
               </div>
               </div>
