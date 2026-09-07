@@ -966,44 +966,59 @@ const fetchWorldBank = async (cc, code, y0, y1) => {
 };
 
 const fetchIMF = async (cc, code, y0, y1) => {
+  const ckey = `imf:${cc}:${code}:${y0}:${y1}`;
+  const cached = cacheGet(ckey);
+  if(cached) return cached;
   try {
     const iso3 = ISO3[cc] || cc;
     const r = await fetch(`https://www.imf.org/external/datamapper/api/v1/${code}/${iso3}`);
     const j = await r.json();
     const data = j?.values?.[code]?.[iso3];
-    if (!data) return [];
-    return Object.entries(data)
+    if (!data) { cacheSet(ckey,[]); return []; }
+    const result = Object.entries(data)
       .filter(([y, v]) => +y >= y0 && +y <= y1 && v != null)
       .map(([y, v]) => ({year: parseInt(y), value: parseFloat(v)}))
       .sort((a, b) => a.year - b.year);
+    cacheSet(ckey, result);
+    return result;
   } catch { return []; }
 };
 
 const fetchFRED = async (code, y0, y1, key) => {
   if (!key) return [];
+  const ckey = `fred:${code}:${y0}:${y1}`;
+  const cached = cacheGet(ckey);
+  if(cached) return cached;
   try {
     const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${code}&api_key=${key}&file_type=json&observation_start=${y0}-01-01&observation_end=${y1}-12-31&frequency=a&aggregation_method=avg`;
     const r = await fetch(url);
     const j = await r.json();
-    if (!j?.observations) return [];
-    return j.observations
+    if (!j?.observations) { cacheSet(ckey,[]); return []; }
+    const result = j.observations
       .filter(o => o.value !== '.' && o.value != null)
       .map(o => ({year: parseInt(o.date.substring(0, 4)), value: parseFloat(o.value)}))
       .sort((a, b) => a.year - b.year);
+    cacheSet(ckey, result);
+    return result;
   } catch { return []; }
 };
 
 const fetchWHO = async (cc, code, y0, y1) => {
+  const ckey = `who:${cc}:${code}:${y0}:${y1}`;
+  const cached = cacheGet(ckey);
+  if(cached) return cached;
   try {
     const iso3 = ISO3[cc] || cc;
     const url = `https://ghoapi.azureedge.net/api/${code}?$filter=SpatialDim eq '${iso3}' and TimeDim ge ${y0} and TimeDim le ${y1}&$select=TimeDim,NumericValue&$orderby=TimeDim`;
     const r = await fetch(url);
     const j = await r.json();
-    if (!j?.value) return [];
-    return j.value
+    if (!j?.value) { cacheSet(ckey,[]); return []; }
+    const result = j.value
       .filter(d => d.NumericValue != null)
       .map(d => ({year: d.TimeDim, value: d.NumericValue}))
       .sort((a, b) => a.year - b.year);
+    cacheSet(ckey, result);
+    return result;
   } catch { return []; }
 };
 
@@ -2368,6 +2383,7 @@ function Dashboard({user, onLogout}) {
   const [cmpMultiData,setCmpMultiData]=useState({});
   const [data,setData]=useState([]);
   const [rawData,setRawData]=useState([]);
+  const [cmpRawData,setCmpRawData]=useState([]);
   const [cmpData,setCmpData]=useState([]);
   const [loading,setLoading]=useState(false);
 
@@ -2423,14 +2439,14 @@ function Dashboard({user, onLogout}) {
   },[dataLevel]);
 
   // Load data
+    // Fetches RAW data over the network only — never depends on transform/impute
+  // (those are pure client-side reprocessing of already-fetched data, applied separately below)
   const loadData = useCallback(async()=>{
     if(!varBasket.length) return;
     setLoading(true);
     const apiKeys={fred:settings.fredKey||"",anthropic:settings.anthropicKey||""};
 
-    // Fetch each basket item from its own source
     const fetchBasketItem = async (item, countryCode) => {
-      // Imported CSV data
       if(item.sourceId==="__imported__"){
         return importedData?.series?.[item.varCode] || [];
       }
@@ -2442,7 +2458,6 @@ function Dashboard({user, onLogout}) {
       return fetchData(src.id, vd, cc2, startYear, endYear, apiKeys);
     };
 
-    // Primary country
     const primaryResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, effCountry)));
     const newMultiData = {};
     const emptyVars=new Set();
@@ -2450,17 +2465,12 @@ function Dashboard({user, onLogout}) {
       const key=`${item.sourceId}:${item.varCode}`;
       const result=primaryResults[i]||[];
       newMultiData[key] = result;
-      // Only mark N/A if result is genuinely empty array (not null/error)
       if(Array.isArray(primaryResults[i])&&primaryResults[i].length===0) emptyVars.add(key);
     });
     setNoDataVars(emptyVars);
     setMultiData(newMultiData);
-    const primaryData = primaryResults[0]||[];
-    const rawD=primaryData; setRawData(rawD);
-    const processedD=applyTransform(imputeData(rawD, appliedImpute), appliedTransform);
-    setData(processedD);
+    setRawData(primaryResults[0]||[]);
 
-    // Comparison country
     if(cmpOn){
       const cmpResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, cmpCountry)));
       const newCmpMulti = {};
@@ -2468,13 +2478,27 @@ function Dashboard({user, onLogout}) {
         newCmpMulti[`${item.sourceId}:${item.varCode}`] = cmpResults[i]||[];
       });
       setCmpMultiData(newCmpMulti);
-      setCmpData(applyTransform(imputeData(cmpResults[0]||[], appliedImpute), appliedTransform));
-    } else { setCmpData([]); setCmpMultiData({}); }
+      setCmpRawData(cmpResults[0]||[]);
+    } else { setCmpRawData([]); setCmpMultiData({}); }
 
     setLoading(false);
-  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,appliedImpute,appliedTransform,importedData]);
+  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,importedData]);
 
   useEffect(()=>{loadData();},[loadData]);
+
+  // Reprocess (transform/impute) purely client-side — NO network calls, instant on Apply
+  useEffect(()=>{
+    setData(applyTransform(imputeData(rawData, appliedImpute), appliedTransform));
+    const missing=rawData.filter(d=>d.value==null).length;
+    if(missing>0&&appliedImpute==="none"&&rawData.length>0){
+      setMissingAlert({count:missing,total:rawData.length,varName:varBasket[0]?.label||"variable"});
+    } else setMissingAlert(null);
+  },[rawData, appliedImpute, appliedTransform]);
+
+  useEffect(()=>{
+    setCmpData(applyTransform(imputeData(cmpRawData, appliedImpute), appliedTransform));
+  },[cmpRawData, appliedImpute, appliedTransform]);
+
   useEffect(()=>{setInsight("");setAiError("");},[sourceId,varCode,effCountry,startYear,endYear]);
 
   // Chart merge
