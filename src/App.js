@@ -1190,6 +1190,54 @@ const interpolateFreq=(data, freq)=>{
 };
 
 
+
+// ── Summary Statistics ───────────────────────────────────────────────────────
+const summaryStats = (data) => {
+  const vals = data.filter(d=>d.value!=null&&!isNaN(d.value)).map(d=>d.value).sort((a,b)=>a-b);
+  const n = vals.length;
+  if(n===0) return null;
+  const sum = vals.reduce((s,v)=>s+v,0);
+  const mean = sum/n;
+  const variance = vals.reduce((s,v)=>s+(v-mean)**2,0)/n;
+  const std = Math.sqrt(variance);
+  const median = n%2 ? vals[(n-1)/2] : (vals[n/2-1]+vals[n/2])/2;
+  const q1 = vals[Math.floor(n*0.25)];
+  const q3 = vals[Math.floor(n*0.75)];
+  const min = vals[0], max = vals[n-1];
+  const range = max-min;
+  const cv = mean!==0 ? (std/Math.abs(mean))*100 : 0; // coefficient of variation
+  // Skewness (Fisher-Pearson)
+  const skew = std>0 ? vals.reduce((s,v)=>s+((v-mean)/std)**3,0)/n : 0;
+  // Kurtosis (excess)
+  const kurt = std>0 ? vals.reduce((s,v)=>s+((v-mean)/std)**4,0)/n - 3 : 0;
+  return {n,mean,median,std,variance,min,max,range,q1,q3,iqr:q3-q1,cv,skew,kurt,sum};
+};
+
+// Generate normal distribution curve points for overlay
+const normalCurve = (mean, std, nPoints=60) => {
+  if(!std||std<=0) return [];
+  const pts=[];
+  const lo=mean-4*std, hi=mean+4*std;
+  for(let i=0;i<nPoints;i++){
+    const x=lo+(hi-lo)*i/(nPoints-1);
+    const y=(1/(std*Math.sqrt(2*Math.PI)))*Math.exp(-0.5*((x-mean)/std)**2);
+    pts.push({x:parseFloat(x.toFixed(4)), density:parseFloat(y.toFixed(8))});
+  }
+  return pts;
+};
+
+// Histogram bins for actual data distribution
+const histogram = (data, bins=12) => {
+  const vals=data.filter(d=>d.value!=null&&!isNaN(d.value)).map(d=>d.value);
+  if(!vals.length) return [];
+  const min=Math.min(...vals), max=Math.max(...vals);
+  const width=(max-min)/bins || 1;
+  const counts=Array(bins).fill(0);
+  vals.forEach(v=>{ let b=Math.floor((v-min)/width); if(b>=bins)b=bins-1; if(b<0)b=0; counts[b]++; });
+  return counts.map((c,i)=>({bin:parseFloat((min+width*(i+0.5)).toFixed(2)), count:c, freq:c/vals.length}));
+};
+
+
 // ── DAG (Directed Acyclic Graph) Causal Analysis ─────────────────────────────
 // Detect cycles in a DAG using DFS
 const dagHasCycle = (nodes, edges) => {
@@ -2294,6 +2342,7 @@ function Dashboard({user, onLogout}) {
   const [compWeights,setCompWeights]=useState([1]);
   const [compNorm,setCompNorm]=useState("minmax");
   const [compAgg,setCompAgg]=useState("weighted_sum");
+  const [compBasis,setCompBasis]=useState("raw"); // raw|zscore|normalized
   const [analysisTab,setAnalysisTab]=useState("transform");
   // DAG causal analysis
   const [dagEdges,setDagEdges]=useState([]); // [{from, to}]
@@ -2686,6 +2735,103 @@ function Dashboard({user, onLogout}) {
       refMin:<ReferenceLine y={minVal} stroke={C.red}  strokeDasharray="4 4" strokeWidth={1} label={{value:`min`,fill:C.red,fontSize:9,fontFamily:C.mono}}/>,
     };
     const chartFmt=currentVar.fmt;
+
+    // ── Summary Statistics view ──────────────────────────────────────────────
+    if(chartType==="stats"){
+      const statsRows=allVarDefs.map((vd,i)=>{
+        const dk=dataKey(vd);
+        const series=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
+        const s=summaryStats(series);
+        return {name:vd.name,color:ACCENT[i%ACCENT.length],fmt:vd.fmt,stats:s};
+      }).filter(r=>r.stats);
+      if(!statsRows.length) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to summarize</div>;
+      // Bar chart comparing means with error bars (std)
+      const meanData=statsRows.map(r=>({name:r.name.substring(0,14),mean:r.stats.mean,std:r.stats.std}));
+      return(
+        <div style={{maxHeight:400,overflowY:"auto"}}>
+          {/* Stats table */}
+          <div style={{overflowX:"auto",marginBottom:14}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:10,minWidth:600}}>
+              <thead><tr style={{background:C.surface,position:"sticky",top:0}}>
+                {["Variable","n","Mean","Median","Std Dev","Min","Max","Q1","Q3","CV%","Skew","Kurt"].map(h=>(
+                  <th key={h} style={{color:C.dim,padding:"7px 8px",textAlign:h==="Variable"?"left":"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {statsRows.map((r,i)=>(
+                  <tr key={i} style={{background:i%2?`${C.surface}88`:"transparent"}}>
+                    <td style={{padding:"6px 8px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,20)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{r.stats.n}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.text,fontWeight:600}}>{fmtVal(r.stats.mean,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.median,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.gold}}>{fmtVal(r.stats.std,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.min,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.max,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q1,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q3,r.fmt)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:C.teal}}>{r.stats.cv.toFixed(1)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:Math.abs(r.stats.skew)>1?C.red:C.mid}}>{r.stats.skew.toFixed(2)}</td>
+                    <td style={{padding:"6px 8px",textAlign:"right",color:Math.abs(r.stats.kurt)>1?C.orange:C.mid}}>{r.stats.kurt.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* Mean comparison bar chart */}
+          <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.1em"}}>Mean Comparison (± Std Dev)</div>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={meanData} margin={{top:10,right:16,left:0,bottom:0}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="name" tick={{fill:T.mid,fontSize:8,fontFamily:C.mono}} axisLine={{stroke:T.border}}/>
+              <YAxis tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={60} tickFormatter={v=>fmtVal(v,"num")}/>
+              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:11}}/>
+              <Bar dataKey="mean" radius={[4,4,0,0]}>
+                {meanData.map((e,i)=><Cell key={i} fill={ACCENT[i%ACCENT.length]}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
+
+    // ── Distribution / Normal curve view ─────────────────────────────────────
+    if(chartType==="dist"){
+      const vd=allVarDefs[0];
+      if(!vd) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>Select a variable</div>;
+      const dk=dataKey(vd);
+      const series=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
+      const s=summaryStats(series);
+      if(!s) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to plot</div>;
+      const hist=histogram(series,12);
+      const curve=normalCurve(s.mean,s.std,60);
+      // Scale normal density to histogram freq for overlay
+      const maxFreq=Math.max(...hist.map(h=>h.freq));
+      const maxDens=Math.max(...curve.map(c=>c.density))||1;
+      const merged=hist.map(h=>({bin:h.bin,freq:h.freq}));
+      const curveScaled=curve.map(c=>({bin:c.x,normal:(c.density/maxDens)*maxFreq}));
+      return(
+        <div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:14,marginBottom:10,padding:"8px 12px",background:C.surface,borderRadius:8,fontFamily:C.mono,fontSize:10}}>
+            <span style={{color:ACCENT[0],fontWeight:700}}>{vd.name.substring(0,24)}</span>
+            <span><span style={{color:C.dim}}>μ=</span>{fmtVal(s.mean,vd.fmt)}</span>
+            <span><span style={{color:C.dim}}>σ=</span>{fmtVal(s.std,vd.fmt)}</span>
+            <span><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(2)}</span></span>
+            <span style={{color:Math.abs(s.skew)<0.5?C.teal:C.orange,fontSize:9}}>{Math.abs(s.skew)<0.5?"≈ Normal":s.skew>0?"Right-skewed":"Left-skewed"}</span>
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart margin={{top:10,right:16,left:0,bottom:10}}>
+              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
+              <XAxis dataKey="bin" type="number" domain={["auto","auto"]} tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={{stroke:T.border}} tickFormatter={v=>fmtVal(v,vd.fmt)} allowDuplicatedCategory={false}/>
+              <YAxis tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={50} tickFormatter={v=>(v*100).toFixed(0)+"%"}/>
+              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:10}}/>
+              <Legend wrapperStyle={{color:T.mid,fontSize:10,fontFamily:C.mono}}/>
+              <Bar data={merged} dataKey="freq" name="Observed frequency" fill={`${ACCENT[0]}99`} radius={[3,3,0,0]}/>
+              <Line data={curveScaled} dataKey="normal" name="Normal curve" stroke={C.red} strokeWidth={2.5} dot={false} type="monotone"/>
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      );
+    }
 
     if(chartType==="bar") return(
       <BarChart data={multiChartData} margin={{top:10,right:16,left:0,bottom:0}}>
@@ -3181,6 +3327,14 @@ function Dashboard({user, onLogout}) {
                       </select>
                     </div>
                     <div style={{marginBottom:6}}>
+                      <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Statistical Basis</div>
+                      <select value={compBasis} onChange={e=>setCompBasis(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px"}}>
+                        <option value="raw">Raw values</option>
+                        <option value="zscore">Z-score standardised</option>
+                      </select>
+                      <div style={{color:C.dim,fontSize:7,fontFamily:C.mono,marginTop:3}}>Z-score uses each variable's mean & std for fair weighting</div>
+                    </div>
+                    <div style={{marginBottom:6}}>
                       <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:4}}>Aggregation</div>
                       <select value={compAgg} onChange={e=>setCompAgg(e.target.value)} style={{...sel,fontSize:10,padding:"5px 8px"}}>
                         {AGG_METHODS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
@@ -3280,9 +3434,9 @@ function Dashboard({user, onLogout}) {
                 </p>
               </div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                {["area","line","bar"].map(t=>(
+                {[["area","◭"],["line","╱"],["bar","▮"],["stats","Σ"],["dist","∿"]].map(([t,ic])=>(
                   <button key={t} onClick={()=>setChartType(t)} style={{...pill(chartType===t),textTransform:"capitalize",fontSize:10}}>
-                    {t==="area"?"◭":t==="line"?"╱":t==="bar"?"▮":"⊙"} {t}
+                    {ic} {t==="dist"?"distribution":t}
                   </button>
                 ))}
                 {varCodes.length>1&&(
@@ -3577,7 +3731,17 @@ function Dashboard({user, onLogout}) {
                 {/* Analysis result */}
                 <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"12px 14px"}}>
                   <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:8}}>Backdoor Criterion Analysis</div>
-                  <div style={{color:C.text,fontSize:12,marginBottom:10,fontFamily:C.mono}}>Effect: <span style={{color:C.gold}}>{tName?.substring(0,20)}</span> → <span style={{color:C.teal}}>{oName?.substring(0,20)}</span></div>
+                  <div style={{color:C.text,fontSize:12,marginBottom:6,fontFamily:C.mono}}>Effect: <span style={{color:C.gold}}>{tName?.substring(0,20)}</span> → <span style={{color:C.teal}}>{oName?.substring(0,20)}</span></div>
+                  {(()=>{
+                    const tItem=varBasket[dagTreatment], oItem=varBasket[dagOutcome];
+                    const tS=tItem?summaryStats(applyTransform(imputeData(multiData[`${tItem.sourceId}:${tItem.varCode}`]||[],appliedImpute),appliedTransform)):null;
+                    const oS=oItem?summaryStats(applyTransform(imputeData(multiData[`${oItem.sourceId}:${oItem.varCode}`]||[],appliedImpute),appliedTransform)):null;
+                    if(!tS||!oS) return null;
+                    return <div style={{display:"flex",gap:14,marginBottom:10,fontSize:9,fontFamily:C.mono,flexWrap:"wrap"}}>
+                      <span style={{color:C.gold}}>X: μ={tS.mean.toFixed(1)} σ={tS.std.toFixed(1)}</span>
+                      <span style={{color:C.teal}}>Y: μ={oS.mean.toFixed(1)} σ={oS.std.toFixed(1)}</span>
+                    </div>;
+                  })()}
                   {analysis.confounders.length>0&&(
                     <div style={{marginBottom:8}}>
                       <div style={{color:C.red,fontSize:10,fontFamily:C.mono,fontWeight:700,marginBottom:4}}>⚠ Control for these confounders:</div>
