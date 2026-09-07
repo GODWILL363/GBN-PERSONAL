@@ -292,7 +292,8 @@ const COUNTRIES = [
   {code:"NZ",name:"New Zealand",region:"Oceania",flag:"🇳🇿"},
 ];
 const REGIONS = ["All","Africa","Americas","Europe","Asia","Middle East","Oceania"];
-const YEARS = Array.from({length:65},(_,i)=>1960+i);
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = Array.from({length:CURRENT_YEAR-1960+1},(_,i)=>1960+i);
 
 // ══════════════════════════════════════════════
 // DATA SOURCES — MACRO LEVEL
@@ -1968,7 +1969,7 @@ function Settings({user, settings, onSave, onClose}) {
             ))}
           </div>
           {/* Content */}
-          <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
+          <div id="scroll-settings" style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
             {tab==="account"&&(
               <>
                 <Sec title="Profile">
@@ -2315,8 +2316,8 @@ function Dashboard({user, onLogout}) {
   const [countrySearch,setCountrySearch]=useState("");
 
   // Time
-  const [startYear,setStartYear]=useState(2000);
-  const [endYear,setEndYear]=useState(2023);
+  const [startYear,setStartYear]=useState(CURRENT_YEAR-23);
+  const [endYear,setEndYear]=useState(CURRENT_YEAR);
 
   // Chart
   const [chartType,setChartType]=useState("area");
@@ -2831,21 +2832,22 @@ function Dashboard({user, onLogout}) {
       );
     }
 
-    // ── Distribution / Normal curve view ─────────────────────────────────────
+    // ── Distribution / Normal curve view (bell-curve style) ──────────────────
     if(chartType==="dist"){
       const vd=allVarDefs[0];
       if(!vd) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>Select a variable</div>;
       const dk=dataKey(vd);
       const series=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
       const s=summaryStats(series);
-      if(!s) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to plot</div>;
-      const hist=histogram(series,12);
-      const curve=normalCurve(s.mean,s.std,60);
-      // Scale normal density to histogram freq for overlay
-      const maxFreq=Math.max(...hist.map(h=>h.freq));
+      if(!s||!s.std) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to plot</div>;
+      const curve=normalCurve(s.mean,s.std,120);
       const maxDens=Math.max(...curve.map(c=>c.density))||1;
-      const merged=hist.map(h=>({bin:h.bin,freq:h.freq}));
-      const curveScaled=curve.map(c=>({bin:c.x,normal:(c.density/maxDens)*maxFreq}));
+      const curveData=curve.map(c=>({x:c.x, y:c.density}));
+      const sigmaMarks=[-3,-2,-1,0,1,2,3].map(k=>({
+        k, x:s.mean+k*s.std,
+        y:(1/(s.std*Math.sqrt(2*Math.PI)))*Math.exp(-0.5*k*k),
+        label:k===0?"Mean (μ)":`μ ${k>0?"+":"-"} ${Math.abs(k)}σ`,
+      }));
       return(
         <div>
           <div style={{display:"flex",flexWrap:"nowrap",alignItems:"center",gap:10,marginBottom:10,padding:"7px 12px",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,fontFamily:C.mono,fontSize:10,overflowX:"auto",whiteSpace:"nowrap"}}>
@@ -2855,17 +2857,46 @@ function Dashboard({user, onLogout}) {
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(3)}</span></span>
             <span style={{padding:"2px 8px",borderRadius:4,fontSize:8,fontWeight:700,flexShrink:0,background:Math.abs(s.skew)<0.5?`${C.teal}18`:`${C.orange}18`,color:Math.abs(s.skew)<0.5?C.teal:C.orange}}>{Math.abs(s.skew)<0.5?"≈ Normal":s.skew>0?"Right-skewed":"Left-skewed"}</span>
           </div>
-          <ResponsiveContainer width="100%" height={260}>
-            <ComposedChart margin={{top:10,right:16,left:0,bottom:10}}>
-              <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-              <XAxis dataKey="bin" type="number" domain={["auto","auto"]} tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={{stroke:T.border}} tickFormatter={v=>fmtVal(v,vd.fmt)} allowDuplicatedCategory={false}/>
-              <YAxis tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={50} tickFormatter={v=>(v*100).toFixed(0)+"%"}/>
-              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:10}}/>
-              <Legend wrapperStyle={{color:T.mid,fontSize:10,fontFamily:C.mono}}/>
-              <Bar data={merged} dataKey="freq" name="Observed frequency" fill={`${ACCENT[0]}99`} radius={[3,3,0,0]}/>
-              <Line data={curveScaled} dataKey="normal" name="Normal curve" stroke={C.red} strokeWidth={2.5} dot={false} type="monotone"/>
-            </ComposedChart>
-          </ResponsiveContainer>
+          <div style={{background:"#05070f",borderRadius:10,padding:"16px 10px 8px",border:`1px solid ${C.border}`}}>
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={curveData} margin={{top:20,right:20,left:10,bottom:10}}>
+                <defs>
+                  <linearGradient id="bellGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={C.teal} stopOpacity={0.25}/>
+                    <stop offset="100%" stopColor={C.teal} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="x" type="number" domain={["dataMin","dataMax"]}
+                  ticks={sigmaMarks.map(m=>m.x)}
+                  tickFormatter={(v)=>{
+                    const m=sigmaMarks.find(mm=>Math.abs(mm.x-v)<0.001);
+                    return m?fmtVal(v,vd.fmt):"";
+                  }}
+                  tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}}
+                  axisLine={{stroke:"#2a3350"}} tickLine={false}
+                  height={40}
+                />
+                <YAxis hide domain={[0,maxDens*1.15]}/>
+                <Area type="monotone" dataKey="y" stroke={C.teal} strokeWidth={2.5} fill="url(#bellGrad)" isAnimationActive={false} dot={false}/>
+                {/* Sigma reference lines */}
+                {sigmaMarks.map((m,i)=>(
+                  <ReferenceLine key={i} x={m.x} stroke={m.k===0?"#fff":"#5a6688"} strokeWidth={m.k===0?1.5:1}/>
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
+            {/* Sigma labels row (styled like the reference image) */}
+            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,padding:"0 6px"}}>
+              {sigmaMarks.map((m,i)=>(
+                <div key={i} style={{textAlign:"center",flex:1}}>
+                  <div style={{color:m.k===0?"#fff":"#9aa5c4",fontSize:9,fontFamily:C.mono,fontWeight:m.k===0?700:400,whiteSpace:"nowrap"}}>{m.label}</div>
+                  <div style={{color:m.k===0?C.gold:"#7a88b0",fontSize:9,fontFamily:C.mono}}>{fmtVal(m.x,vd.fmt)}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{textAlign:"center",marginTop:10,color:"#7a88b0",fontSize:9,fontFamily:C.mono}}>
+              Mean (μ) = {fmtVal(s.mean,vd.fmt)} &nbsp;·&nbsp; Standard Deviation (σ) = {fmtVal(s.std,vd.fmt)}
+            </div>
+          </div>
         </div>
       );
     }
@@ -2985,7 +3016,7 @@ function Dashboard({user, onLogout}) {
         {/* Mobile overlay */}
         {isMobile&&sidebarOpen&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
         {/* SIDEBAR - hidden overlay on mobile, fixed panel on desktop */}
-        <aside style={{
+        <aside id="scroll-sidebar" style={{
           background:T.surface,
           borderRight:`1px solid ${T.border}`,
           display:"flex",
@@ -3081,7 +3112,7 @@ function Dashboard({user, onLogout}) {
               </div>
               <input value={varSearch} onChange={e=>setVarSearch(e.target.value)} placeholder="🔍 Search variables..." style={{...inp,fontSize:11,padding:"7px 10px"}}/>
             </div>
-            <div style={{overflowY:"auto",flex:1,padding:"0 6px 8px"}}>
+            <div id="scroll-varlist" style={{overflowY:"auto",flex:1,padding:"0 6px 8px"}}>
               {Object.entries(groupedVars).map(([cat,vars])=>(
                 <div key={cat}>
                   <div style={{fontSize:8,color:C.dim,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",padding:"6px 6px 3px"}}>{cat}</div>
@@ -3127,7 +3158,7 @@ function Dashboard({user, onLogout}) {
                   ))}
                 </div>
               </div>
-              <div style={{overflowY:"auto",flex:1,padding:"0 6px 8px"}}>
+              <div id="scroll-countrylist" style={{overflowY:"auto",flex:1,padding:"0 6px 8px"}}>
                 <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,padding:"3px 6px 4px"}}>{filteredCountries.length} countr{filteredCountries.length===1?"y":"ies"}</div>
                 {filteredCountries.map(c=>{
                   const active=country===c.code;
@@ -3427,7 +3458,7 @@ function Dashboard({user, onLogout}) {
         {/* MAIN CONTENT */}
         {/* DRAG HANDLE */}
         <div onMouseDown={startResize} style={{width:isMobile?0:5,cursor:"col-resize",background:T.border,flexShrink:0,transition:"background .15s",display:isMobile?"none":"flex",alignItems:"center",justifyContent:"center"}} onMouseEnter={e=>e.currentTarget.style.background=C.gold} onMouseLeave={e=>e.currentTarget.style.background=T.border}><div style={{width:2,height:40,borderRadius:2,background:"transparent"}}/></div>
-        <main style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16,background:T.bg}}>
+        <main id="scroll-main" style={{flex:1,overflowY:"auto",padding:18,display:"flex",flexDirection:"column",gap:16,background:T.bg}}>
 
           {/* Source info banner */}
           <div style={{display:"flex",alignItems:isMobile?"flex-start":"center",gap:isMobile?6:12,padding:isMobile?"8px 12px":"10px 16px",background:`${source.color}0f`,border:`1px solid ${source.color}33`,borderRadius:9,flexDirection:isMobile?"column":"row"}}>
@@ -3549,14 +3580,14 @@ function Dashboard({user, onLogout}) {
                 )}
               <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()} style={{overflow:"hidden",maxWidth:"100%"}}>
                 {(chartType==="stats"||chartType==="dist")?(
-                  <div style={{maxHeight:isMobile?360:440,overflowY:"auto",overflowX:"hidden"}}>{renderChart()}</div>
+                  <div id="scroll-statsview" style={{maxHeight:isMobile?360:440,overflowY:"auto",overflowX:"hidden"}}>{renderChart()}</div>
                 ):(
                   <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
                 )}
               </div>
               </div>
             ) : (
-              <div style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <div id="scroll-table" style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
                 {/* Multi-variable table */}
                 {(()=>{
                   const allVarDefs2=varBasket.map(item=>{
@@ -3942,10 +3973,30 @@ function Dashboard({user, onLogout}) {
 
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0;}
-        ::-webkit-scrollbar{width:4px;height:4px;}
-        ::-webkit-scrollbar-track{background:${C.bg};}
-        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}
-        ::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}
+        ::-webkit-scrollbar{width:12px;height:12px;}
+        ::-webkit-scrollbar-track{background:${C.bg};border-radius:8px;}
+        ::-webkit-scrollbar-thumb{background:${C.border};border-radius:8px;border:2px solid ${C.bg};background-clip:padding-box;}
+        ::-webkit-scrollbar-thumb:hover{background:${C.gold}aa;}
+        ::-webkit-scrollbar-corner{background:${C.bg};}
+        #scroll-sidebar::-webkit-scrollbar-thumb{background:${C.gold}aa;border:2px solid ${C.surface};background-clip:padding-box;}
+        #scroll-sidebar::-webkit-scrollbar-thumb:hover{background:${C.gold};}
+        #scroll-varlist::-webkit-scrollbar-thumb{background:${C.teal}aa;border:2px solid ${C.surface};background-clip:padding-box;}
+        #scroll-varlist::-webkit-scrollbar-thumb:hover{background:${C.teal};}
+        #scroll-countrylist::-webkit-scrollbar-thumb{background:${C.purple}aa;border:2px solid ${C.surface};background-clip:padding-box;}
+        #scroll-countrylist::-webkit-scrollbar-thumb:hover{background:${C.purple};}
+        #scroll-main::-webkit-scrollbar-thumb{background:${C.blue}aa;border:2px solid ${C.bg};background-clip:padding-box;}
+        #scroll-main::-webkit-scrollbar-thumb:hover{background:${C.blue};}
+        #scroll-table::-webkit-scrollbar-thumb{background:${C.cyan}aa;border:2px solid ${C.card};background-clip:padding-box;}
+        #scroll-table::-webkit-scrollbar-thumb:hover{background:${C.cyan};}
+        #scroll-statsview::-webkit-scrollbar-thumb{background:${C.orange}aa;border:2px solid ${C.card};background-clip:padding-box;}
+        #scroll-statsview::-webkit-scrollbar-thumb:hover{background:${C.orange};}
+        #scroll-settings::-webkit-scrollbar-thumb{background:${C.blue}aa;border:2px solid ${C.surface};background-clip:padding-box;}
+        #scroll-settings::-webkit-scrollbar-thumb:hover{background:${C.blue};}
+        #scroll-adminnav::-webkit-scrollbar-thumb{background:${C.gold}aa;border:2px solid ${C.surface};background-clip:padding-box;}
+        #scroll-adminnav::-webkit-scrollbar-thumb:hover{background:${C.gold};}
+        #scroll-adminmain::-webkit-scrollbar-thumb{background:${C.teal}aa;border:2px solid ${C.bg};background-clip:padding-box;}
+        #scroll-adminmain::-webkit-scrollbar-thumb:hover{background:${C.teal};}
+        
         select option{background:${C.card};color:${C.text};}
         @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         a{text-decoration:none;}
@@ -4340,7 +4391,7 @@ function AdminPanel({user, onLogout}) {
         {sidebarOpen&&isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
 
         {/* ADMIN SIDEBAR NAV */}
-        <nav style={{background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
+        <nav id="scroll-adminnav" style={{background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
           {isMobile&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}><button onClick={()=>setSidebarOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"5px 12px",fontSize:12,fontFamily:C.mono}}>✕ Close</button></div>}
           {navItems.map(n=>(
             <button key={n.id} onClick={()=>{setTab(n.id);if(isMobile) setSidebarOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
@@ -4357,7 +4408,7 @@ function AdminPanel({user, onLogout}) {
         </nav>
 
         {/* MAIN CONTENT */}
-        <main style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",gap:16}}>
+        <main id="scroll-adminmain" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",gap:16}}>
 
           {/* ── OVERVIEW ── */}
           {tab==="overview"&&(
@@ -4772,7 +4823,7 @@ function AdminPanel({user, onLogout}) {
         #root{height:100%;width:100%;overflow:hidden;}
         @media(max-width:768px){
           table{font-size:10px!important;}
-        }::-webkit-scrollbar{width:4px;height:4px;}::-webkit-scrollbar-track{background:${C.bg};}::-webkit-scrollbar-thumb{background:${C.border};border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:${C.gold}55;}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
+        }::-webkit-scrollbar{width:12px;height:12px;}::-webkit-scrollbar-track{background:${C.bg};border-radius:8px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:8px;border:2px solid ${C.bg};background-clip:padding-box;}::-webkit-scrollbar-thumb:hover{background:${C.gold}aa;}#scroll-adminnav::-webkit-scrollbar-thumb{background:${C.gold}aa;border:2px solid ${C.surface};background-clip:padding-box;}#scroll-adminnav::-webkit-scrollbar-thumb:hover{background:${C.gold};}#scroll-adminmain::-webkit-scrollbar-thumb{background:${C.teal}aa;border:2px solid ${C.bg};background-clip:padding-box;}#scroll-adminmain::-webkit-scrollbar-thumb:hover{background:${C.teal};}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
 
       {/* Invite Modal */}
       {showInvite&&<InviteModal onClose={()=>setShowInvite(false)} onDone={()=>{refresh();notify("User invited successfully");}}/>}
