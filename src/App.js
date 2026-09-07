@@ -2748,30 +2748,67 @@ function Dashboard({user, onLogout}) {
       // Bar chart comparing means with error bars (std)
       const meanData=statsRows.map(r=>({name:r.name.substring(0,14),mean:r.stats.mean,std:r.stats.std}));
       return(
-        <div style={{maxHeight:400,overflowY:"auto"}}>
-          {/* Stats table */}
-          <div style={{overflowX:"auto",marginBottom:14}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:10,minWidth:600}}>
-              <thead><tr style={{background:C.surface,position:"sticky",top:0}}>
-                {["Variable","n","Mean","Median","Std Dev","Min","Max","Q1","Q3","CV%","Skew","Kurt"].map(h=>(
-                  <th key={h} style={{color:C.dim,padding:"7px 8px",textAlign:h==="Variable"?"left":"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,whiteSpace:"nowrap"}}>{h}</th>
+        <div>
+          {/* Stats table - SPSS style */}
+          <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.1em"}}>Descriptive Statistics</div>
+          <div style={{overflowX:"auto",marginBottom:16,border:`1px solid ${C.border}`,borderRadius:8}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:10,minWidth:640}}>
+              <thead>
+                <tr style={{background:C.surface}}>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"left",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Variable</th>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>N</th>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Minimum</th>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Maximum</th>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Mean</th>
+                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Std. Dev.</th>
+                  <th colSpan={2} style={{color:C.gold,padding:"6px 10px",textAlign:"center",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Skewness</th>
+                  <th colSpan={2} style={{color:C.orange,padding:"6px 10px",textAlign:"center",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Kurtosis</th>
+                </tr>
+                <tr style={{background:C.surface}}>
+                  <th style={{color:C.dim,padding:"4px 10px",textAlign:"right",fontSize:8,borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Statistic</th>
+                  <th style={{color:C.dim,padding:"4px 10px",textAlign:"right",fontSize:8,borderBottom:`1px solid ${C.border}`}}>Std. Error</th>
+                  <th style={{color:C.dim,padding:"4px 10px",textAlign:"right",fontSize:8,borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Statistic</th>
+                  <th style={{color:C.dim,padding:"4px 10px",textAlign:"right",fontSize:8,borderBottom:`1px solid ${C.border}`}}>Std. Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {statsRows.map((r,i)=>{
+                  const seSkew=r.stats.n>0?Math.sqrt(6/r.stats.n):0;
+                  const seKurt=r.stats.n>0?Math.sqrt(24/r.stats.n):0;
+                  return(
+                  <tr key={i} style={{background:i%2?`${C.surface}88`:"transparent"}}>
+                    <td style={{padding:"7px 10px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,22)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{r.stats.n}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.min,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.max,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.text,fontWeight:600}}>{fmtVal(r.stats.mean,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.std,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:Math.abs(r.stats.skew)>1?C.red:C.text,borderLeft:`1px solid ${C.border}`}}>{r.stats.skew.toFixed(3)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.dim}}>{seSkew.toFixed(3)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:Math.abs(r.stats.kurt)>1?C.orange:C.text,borderLeft:`1px solid ${C.border}`}}>{r.stats.kurt.toFixed(3)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.dim}}>{seKurt.toFixed(3)}</td>
+                  </tr>
+                );})}
+              </tbody>
+            </table>
+          </div>
+          {/* Extra stats row: Median, Q1, Q3, CV */}
+          <div style={{overflowX:"auto",marginBottom:16}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:10,minWidth:500}}>
+              <thead><tr style={{background:C.surface}}>
+                {["Variable","Median","Q1","Q3","IQR","CV%"].map(h=>(
+                  <th key={h} style={{color:C.dim,padding:"6px 10px",textAlign:h==="Variable"?"left":"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`}}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {statsRows.map((r,i)=>(
                   <tr key={i} style={{background:i%2?`${C.surface}88`:"transparent"}}>
-                    <td style={{padding:"6px 8px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,20)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{r.stats.n}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.text,fontWeight:600}}>{fmtVal(r.stats.mean,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.median,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.gold}}>{fmtVal(r.stats.std,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.min,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.max,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q1,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q3,r.fmt)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:C.teal}}>{r.stats.cv.toFixed(1)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:Math.abs(r.stats.skew)>1?C.red:C.mid}}>{r.stats.skew.toFixed(2)}</td>
-                    <td style={{padding:"6px 8px",textAlign:"right",color:Math.abs(r.stats.kurt)>1?C.orange:C.mid}}>{r.stats.kurt.toFixed(2)}</td>
+                    <td style={{padding:"6px 10px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,22)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.median,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q1,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q3,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.iqr,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.teal}}>{r.stats.cv.toFixed(1)}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -3511,7 +3548,11 @@ function Dashboard({user, onLogout}) {
                   </div>
                 )}
               <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()} style={{overflow:"hidden",maxWidth:"100%"}}>
-                <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
+                {(chartType==="stats"||chartType==="dist")?(
+                  <div style={{maxHeight:isMobile?360:440,overflowY:"auto",overflowX:"hidden"}}>{renderChart()}</div>
+                ):(
+                  <ResponsiveContainer width="100%" height={isMobile?220:chartType==="scatter"?320:300}>{renderChart()}</ResponsiveContainer>
+                )}
               </div>
               </div>
             ) : (
