@@ -2370,6 +2370,7 @@ function Dashboard({user, onLogout}) {
 
   // Chart
   const [chartType,setChartType]=useState("area");
+  const [distVar,setDistVar]=useState(0);
   const [viewMode,setViewMode]=useState("chart");
 
   // Compare
@@ -2821,7 +2822,16 @@ function Dashboard({user, onLogout}) {
       }).filter(r=>r.stats);
       if(!statsRows.length) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to summarize</div>;
       // Bar chart comparing means with error bars (std)
-      const meanData=statsRows.map(r=>({name:r.name.substring(0,14),mean:r.stats.mean,std:r.stats.std}));
+      const meanData=statsRows.map((r,i)=>({
+        name:r.name.substring(0,14),
+        fullName:r.name,
+        mean:r.stats.mean,
+        std:r.stats.std,
+        fmt:r.fmt,
+        color:ACCENT[i%ACCENT.length],
+        // Normalized bar height (0-100) so tiny-unit vars still show a visible bar
+        normHeight: r.stats.max!==0 ? Math.abs(r.stats.mean)/Math.abs(r.stats.max)*100 : 0,
+      }));
       return(
         <div>
           {/* Stats table - SPSS style */}
@@ -2830,12 +2840,12 @@ function Dashboard({user, onLogout}) {
             <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:10,minWidth:640}}>
               <thead>
                 <tr style={{background:C.surface}}>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"left",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Variable</th>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>N</th>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Minimum</th>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Maximum</th>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Mean</th>
-                  <th rowSpan={2} style={{color:C.dim,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Std. Dev.</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"left",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Variable</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>N</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Minimum</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Maximum</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Mean</th>
+                  <th rowSpan={2} style={{color:C.mid,padding:"8px 10px",textAlign:"right",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,verticalAlign:"bottom"}}>Std. Dev.</th>
                   <th colSpan={2} style={{color:C.gold,padding:"6px 10px",textAlign:"center",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Skewness</th>
                   <th colSpan={2} style={{color:C.orange,padding:"6px 10px",textAlign:"center",fontSize:8,textTransform:"uppercase",borderBottom:`1px solid ${C.border}`,borderLeft:`1px solid ${C.border}`}}>Kurtosis</th>
                 </tr>
@@ -2853,15 +2863,15 @@ function Dashboard({user, onLogout}) {
                   return(
                   <tr key={i} style={{background:i%2?`${C.surface}88`:"transparent"}}>
                     <td style={{padding:"7px 10px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,22)}</td>
-                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{r.stats.n}</td>
-                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.min,r.fmt)}</td>
-                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.max,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.text}}>{r.stats.n}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.min,r.fmt)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.max,r.fmt)}</td>
                     <td style={{padding:"7px 10px",textAlign:"right",color:C.text,fontWeight:600}}>{fmtVal(r.stats.mean,r.fmt)}</td>
                     <td style={{padding:"7px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.std,r.fmt)}</td>
                     <td style={{padding:"7px 10px",textAlign:"right",color:Math.abs(r.stats.skew)>1?C.red:C.text,borderLeft:`1px solid ${C.border}`}}>{r.stats.skew.toFixed(3)}</td>
-                    <td style={{padding:"7px 10px",textAlign:"right",color:C.dim}}>{seSkew.toFixed(3)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{seSkew.toFixed(3)}</td>
                     <td style={{padding:"7px 10px",textAlign:"right",color:Math.abs(r.stats.kurt)>1?C.orange:C.text,borderLeft:`1px solid ${C.border}`}}>{r.stats.kurt.toFixed(3)}</td>
-                    <td style={{padding:"7px 10px",textAlign:"right",color:C.dim}}>{seKurt.toFixed(3)}</td>
+                    <td style={{padding:"7px 10px",textAlign:"right",color:C.mid}}>{seKurt.toFixed(3)}</td>
                   </tr>
                 );})}
               </tbody>
@@ -2880,35 +2890,56 @@ function Dashboard({user, onLogout}) {
                   <tr key={i} style={{background:i%2?`${C.surface}88`:"transparent"}}>
                     <td style={{padding:"6px 10px",color:r.color,fontWeight:600,whiteSpace:"nowrap"}}>● {r.name.substring(0,22)}</td>
                     <td style={{padding:"6px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.median,r.fmt)}</td>
-                    <td style={{padding:"6px 10px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q1,r.fmt)}</td>
-                    <td style={{padding:"6px 10px",textAlign:"right",color:C.dim}}>{fmtVal(r.stats.q3,r.fmt)}</td>
-                    <td style={{padding:"6px 10px",textAlign:"right",color:C.mid}}>{fmtVal(r.stats.iqr,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.q1,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.q3,r.fmt)}</td>
+                    <td style={{padding:"6px 10px",textAlign:"right",color:C.text}}>{fmtVal(r.stats.iqr,r.fmt)}</td>
                     <td style={{padding:"6px 10px",textAlign:"right",color:C.teal}}>{r.stats.cv.toFixed(1)}%</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {/* Mean comparison bar chart */}
-          <div style={{color:C.dim,fontSize:9,fontFamily:C.mono,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.1em"}}>Mean Comparison (± Std Dev)</div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={meanData} margin={{top:10,right:16,left:0,bottom:0}}>
+          {/* Mean comparison — normalized so every variable's bar is visible regardless of unit */}
+          <div style={{color:C.text,fontSize:10,fontFamily:C.mono,marginBottom:2,textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:700}}>Mean Comparison</div>
+          <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:8}}>Bars scaled to each variable's own range (mixed units) — hover for actual values</div>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={meanData} margin={{top:20,right:16,left:0,bottom:0}}>
               <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-              <XAxis dataKey="name" tick={{fill:T.mid,fontSize:8,fontFamily:C.mono}} axisLine={{stroke:T.border}}/>
-              <YAxis tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={60} tickFormatter={v=>fmtVal(v,"num")}/>
-              <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:11}}/>
-              <Bar dataKey="mean" radius={[4,4,0,0]}>
-                {meanData.map((e,i)=><Cell key={i} fill={ACCENT[i%ACCENT.length]}/>)}
+              <XAxis dataKey="name" tick={{fill:T.text,fontSize:9,fontFamily:C.mono}} axisLine={{stroke:T.border}} interval={0} angle={0}/>
+              <YAxis tick={{fill:T.mid,fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={44} domain={[0,100]} tickFormatter={v=>v+"%"} label={{value:"% of variable max",angle:-90,position:"insideLeft",fill:T.mid,fontSize:8,fontFamily:C.mono}}/>
+              <Tooltip cursor={{fill:`${C.gold}11`}} content={({payload})=>{
+                if(!payload?.length) return null;
+                const d=payload[0]?.payload; if(!d) return null;
+                return(
+                  <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:"10px 14px",fontFamily:C.mono,fontSize:11}}>
+                    <div style={{color:d.color,fontWeight:700,marginBottom:5}}>{d.fullName.substring(0,30)}</div>
+                    <div style={{color:C.text}}>Mean: <b>{fmtVal(d.mean,d.fmt)}</b></div>
+                    <div style={{color:C.mid}}>Std Dev: {fmtVal(d.std,d.fmt)}</div>
+                  </div>
+                );
+              }}/>
+              <Bar dataKey="normHeight" radius={[4,4,0,0]} label={{position:"top",fill:T.text,fontSize:8,fontFamily:C.mono,formatter:(v)=>""}}>
+                {meanData.map((e,i)=><Cell key={i} fill={e.color}/>)}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
+          {/* Real value labels under chart */}
+          <div style={{display:"flex",flexWrap:"wrap",gap:10,marginTop:8,justifyContent:"center"}}>
+            {meanData.map((d,i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:5,fontFamily:C.mono,fontSize:9}}>
+                <span style={{width:8,height:8,borderRadius:2,background:d.color,flexShrink:0}}/>
+                <span style={{color:C.text}}>{d.name}: <b style={{color:d.color}}>{fmtVal(d.mean,d.fmt)}</b></span>
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
 
     // ── Distribution / Normal curve view (bell-curve style) ──────────────────
     if(chartType==="dist"){
-      const vd=allVarDefs[0];
+      const di=distVar<allVarDefs.length?distVar:0;
+      const vd=allVarDefs[di];
       if(!vd) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>Select a variable</div>;
       const dk=dataKey(vd);
       const series=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
@@ -2924,8 +2955,26 @@ function Dashboard({user, onLogout}) {
       }));
       return(
         <div>
+          {/* Variable selector for distribution */}
+          {allVarDefs.length>1&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:10}}>
+              <span style={{color:C.dim,fontSize:8,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",width:"100%",marginBottom:2}}>Select variable for distribution:</span>
+              {allVarDefs.map((v,i)=>(
+                <button key={i} onClick={()=>setDistVar(i)} style={{
+                  display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,
+                  border:`1px solid ${i===di?ACCENT[i%ACCENT.length]:C.border}`,
+                  background:i===di?`${ACCENT[i%ACCENT.length]}22`:"transparent",
+                  color:i===di?ACCENT[i%ACCENT.length]:C.mid,
+                  fontWeight:i===di?700:400,
+                }}>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:ACCENT[i%ACCENT.length],flexShrink:0}}/>
+                  {v.name.substring(0,16)}
+                </button>
+              ))}
+            </div>
+          )}
           <div style={{display:"flex",flexWrap:"nowrap",alignItems:"center",gap:10,marginBottom:10,padding:"7px 12px",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,fontFamily:C.mono,fontSize:10,overflowX:"auto",whiteSpace:"nowrap"}}>
-            <span style={{color:ACCENT[0],fontWeight:700,flexShrink:0}}>{vd.name.substring(0,20)}</span>
+            <span style={{color:ACCENT[di%ACCENT.length],fontWeight:700,flexShrink:0}}>{vd.name.substring(0,20)}</span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>μ=</span><span style={{color:C.text}}>{fmtVal(s.mean,vd.fmt)}</span></span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>σ=</span><span style={{color:C.text}}>{fmtVal(s.std,vd.fmt)}</span></span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(3)}</span></span>
