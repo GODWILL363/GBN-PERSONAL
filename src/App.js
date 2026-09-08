@@ -964,7 +964,7 @@ const fetchWorldBank = async (cc, code, y0, y1) => {
       .sort((a, b) => a.year - b.year);
     if(result.length>0) cacheSet(ckey, result);
     return result;
-  } catch { return []; }
+  } catch (e) { console.error("[EcoScope] World Bank fetch failed:", ckey, e); return []; }
 };
 
 const fetchIMF = async (cc, code, y0, y1) => {
@@ -983,7 +983,7 @@ const fetchIMF = async (cc, code, y0, y1) => {
       .sort((a, b) => a.year - b.year);
     if(result.length>0) cacheSet(ckey, result);
     return result;
-  } catch { return []; }
+  } catch (e) { console.error("[EcoScope] IMF fetch failed:", ckey, e); return []; }
 };
 
 const fetchFRED = async (code, y0, y1, key) => {
@@ -1002,7 +1002,7 @@ const fetchFRED = async (code, y0, y1, key) => {
       .sort((a, b) => a.year - b.year);
     if(result.length>0) cacheSet(ckey, result);
     return result;
-  } catch { return []; }
+  } catch (e) { console.error("[EcoScope] FRED fetch failed:", ckey, e); return []; }
 };
 
 const fetchWHO = async (cc, code, y0, y1) => {
@@ -1021,7 +1021,7 @@ const fetchWHO = async (cc, code, y0, y1) => {
       .sort((a, b) => a.year - b.year);
     if(result.length>0) cacheSet(ckey, result);
     return result;
-  } catch { return []; }
+  } catch (e) { console.error("[EcoScope] WHO fetch failed:", ckey, e); return []; }
 };
 
 const fetchData = async (sourceId, varDef, cc, y0, y1, apiKeys) => {
@@ -3598,6 +3598,7 @@ function Dashboard({user, onLogout}) {
                 <span>No data available for this selection</span>
                 {source.keyRequired&&!settings.fredKey&&<span style={{color:C.red,fontSize:11}}>⚠ FRED API key required — add in Settings</span>}
                 <button onClick={forceRefresh} disabled={loading} style={{...btn(C.teal),padding:"8px 18px",fontSize:11,marginTop:4,opacity:loading?0.6:1,cursor:loading?"wait":"pointer"}}>{loading?"⟳ Retrying…":"↻ Retry Now"}</button>
+                <span style={{fontSize:9,color:C.dim,marginTop:2}}>If this persists, open DevTools (F12) → Console for the exact error</span>
               </div>
             ) : viewMode==="chart" ? (
               <div>
