@@ -320,6 +320,8 @@ const PROXY_ALLOWED_HOSTS = new Set([
   "www.imf.org",
   "api.stlouisfed.org",
   "ghoapi.azureedge.net",
+  "query1.finance.yahoo.com",
+  "query2.finance.yahoo.com",
 ]);
 
 function proxyGet(target, res, redirectsLeft, attempt) {

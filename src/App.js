@@ -718,6 +718,31 @@ const MACRO_SOURCES = [
       {code:"CC.EST",name:"Control of Corruption — Freedom from Corruption",cat:"Governance",fmt:"num",api:"worldbank"},
       {code:"RQ.EST",name:"Regulatory Quality Index — Regulatory Efficiency",cat:"Regulatory",fmt:"num",api:"worldbank"},
     ]
+  },{
+    id:"yahoo", name:"Yahoo Finance — Markets", short:"YF", region:"Global", color:"#7B00FF",
+    desc:"Live & historical market data — stock indices, forex, commodities, crypto. Daily/weekly/monthly frequency.",
+    url:"https://finance.yahoo.com", keyRequired:false, plan:"pro", isMarket:true,
+    note:"Real daily market data via Yahoo Finance. Supports daily, weekly & monthly frequency (not annual-only like other sources).",
+    vars:[
+      {code:"^GSPC",name:"S&P 500 Index",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"^DJI",name:"Dow Jones Industrial Average",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"^IXIC",name:"NASDAQ Composite",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"^FTSE",name:"FTSE 100 (UK)",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"^N225",name:"Nikkei 225 (Japan)",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"GHActrl.PR",name:"Ghana — (search ticker on finance.yahoo.com)",cat:"Equity Indices",fmt:"num",api:"yahoo"},
+      {code:"GC=F",name:"Gold Futures (USD/oz)",cat:"Commodities",fmt:"currency",api:"yahoo"},
+      {code:"CL=F",name:"Crude Oil WTI Futures (USD/bbl)",cat:"Commodities",fmt:"currency",api:"yahoo"},
+      {code:"SI=F",name:"Silver Futures (USD/oz)",cat:"Commodities",fmt:"currency",api:"yahoo"},
+      {code:"CC=F",name:"Cocoa Futures (USD/ton)",cat:"Commodities",fmt:"currency",api:"yahoo"},
+      {code:"KC=F",name:"Coffee Futures (USD/lb)",cat:"Commodities",fmt:"currency",api:"yahoo"},
+      {code:"GHS=X",name:"USD / Ghanaian Cedi",cat:"Forex",fmt:"num",api:"yahoo"},
+      {code:"EURUSD=X",name:"EUR / USD",cat:"Forex",fmt:"num",api:"yahoo"},
+      {code:"GBPUSD=X",name:"GBP / USD",cat:"Forex",fmt:"num",api:"yahoo"},
+      {code:"NGN=X",name:"USD / Nigerian Naira",cat:"Forex",fmt:"num",api:"yahoo"},
+      {code:"ZAR=X",name:"USD / South African Rand",cat:"Forex",fmt:"num",api:"yahoo"},
+      {code:"BTC-USD",name:"Bitcoin (USD)",cat:"Crypto",fmt:"currency",api:"yahoo"},
+      {code:"ETH-USD",name:"Ethereum (USD)",cat:"Crypto",fmt:"currency",api:"yahoo"},
+    ]
   }
 ];
 
@@ -1074,6 +1099,38 @@ const fetchWHO = async (cc, code, y0, y1) => {
   } catch (e) { console.error("[EcoScope] WHO fetch failed:", ckey, e); return []; }
 };
 
+// Yahoo Finance — real daily/weekly/monthly market data (indices, forex, commodities, crypto)
+// interval: 1d, 1wk, 1mo — returns time-stamped closes.
+const fetchYahoo = async (code, y0, y1, interval="1mo") => {
+  const ckey = `yf:${code}:${y0}:${y1}:${interval}`;
+  const cached = cacheGet(ckey);
+  if(cached) return cached;
+  try {
+    const p1 = Math.floor(new Date(`${y0}-01-01`).getTime()/1000);
+    const p2 = Math.floor(new Date(`${y1}-12-31`).getTime()/1000);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(code)}?period1=${p1}&period2=${p2}&interval=${interval}`;
+    const j = await proxyFetch(url);
+    const r = j?.chart?.result?.[0];
+    if(!r?.timestamp || !r?.indicators?.quote?.[0]?.close) return [];
+    const ts = r.timestamp;
+    const closes = r.indicators.quote[0].close;
+    const result = ts.map((t,i)=>{
+      const d = new Date(t*1000);
+      const val = closes[i];
+      if(val==null||isNaN(val)) return null;
+      // Label depends on interval
+      let label;
+      if(interval==="1d") label = d.toISOString().slice(0,10);
+      else if(interval==="1wk") label = d.toISOString().slice(0,10);
+      else if(interval==="1mo") label = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      else label = d.getFullYear();
+      return {year: label, value: parseFloat(val.toFixed(4))};
+    }).filter(Boolean);
+    if(result.length>0) cacheSet(ckey, result);
+    return result;
+  } catch (e) { console.error("[EcoScope] Yahoo fetch failed:", ckey, e); return []; }
+};
+
 const fetchData = async (sourceId, varDef, cc, y0, y1, apiKeys) => {
   const api = varDef.api || sourceId;
   switch (api) {
@@ -1081,6 +1138,7 @@ const fetchData = async (sourceId, varDef, cc, y0, y1, apiKeys) => {
     case "imf":       return fetchIMF(cc, varDef.code, y0, y1);
     case "fred":      return fetchFRED(varDef.code, y0, y1, apiKeys.fred);
     case "who":       return fetchWHO(cc, varDef.code, y0, y1);
+    case "yahoo":     return fetchYahoo(varDef.code, y0, y1, apiKeys.yahooInterval || "1mo");
     default:
       if (["worldbank","bog","bis","unctad","wbpov","ilo","unesco","environment"].includes(sourceId))
         return fetchWorldBank(cc, varDef.wbCode || varDef.code, y0, y1);
@@ -2497,7 +2555,8 @@ function Dashboard({user, onLogout}) {
   const loadData = useCallback(async()=>{
     if(!varBasket.length) return;
     setLoading(true);
-    const apiKeys={fred:settings.fredKey||"",anthropic:settings.anthropicKey||""};
+    const yfInterval = freq==="daily"?"1d":freq==="weekly"?"1wk":freq==="monthly"?"1mo":freq==="annual"?"1mo":"1mo";
+    const apiKeys={fred:settings.fredKey||"",anthropic:settings.anthropicKey||"",yahooInterval:yfInterval};
 
     const fetchBasketItem = async (item, countryCode) => {
       if(item.sourceId==="__imported__"){
@@ -2535,7 +2594,7 @@ function Dashboard({user, onLogout}) {
     } else { setCmpRawData([]); setCmpMultiData({}); }
 
     setLoading(false);
-  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,importedData]);
+  },[varBasket,effCountry,startYear,endYear,cmpOn,cmpCountry,settings.fredKey,importedData,freq]);
 
   useEffect(()=>{loadData();},[loadData]);
 
@@ -3406,25 +3465,49 @@ function Dashboard({user, onLogout}) {
 
 
             {/* Frequency */}
-            {analysisTab==="frequency"&&(
+            {analysisTab==="frequency"&&(()=>{
+              // Determine what the primary basket source actually supports
+              const primarySrc = ALL_SRCS_MAP[varBasket[0]?.sourceId];
+              const isYahoo = varBasket[0]?.sourceId==="yahoo";
+              const isFred = varBasket[0]?.sourceId==="fred" || primarySrc?.vars?.find(v=>v.code===varBasket[0]?.varCode)?.api==="fred";
+              const freqDefs = isYahoo ? [
+                {id:"annual",label:"Annual",note:"Yearly close",real:true},
+                {id:"monthly",label:"Monthly",note:"Real monthly close",real:true},
+                {id:"weekly",label:"Weekly",note:"Real weekly close",real:true},
+                {id:"daily",label:"Daily",note:"Real daily close",real:true},
+              ] : isFred ? [
+                {id:"annual",label:"Annual",note:"Real annual",real:true},
+                {id:"monthly",label:"Monthly",note:"Real FRED monthly",real:true},
+                {id:"quarterly",label:"Quarterly",note:"Real FRED quarterly",real:true},
+              ] : [
+                {id:"annual",label:"Annual",note:"Real — as published",real:true},
+                {id:"quarterly",label:"Quarterly",note:"Interpolated estimate",real:false},
+                {id:"monthly",label:"Monthly",note:"Interpolated estimate",real:false},
+              ];
+              return(
               <div style={{padding:"6px 12px 10px"}}>
-                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6}}>Time Frequency</div>
-                {FREQ_OPTIONS.map(f=>(
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:2}}>Time Frequency</div>
+                <div style={{color:C.mid,fontSize:8,fontFamily:C.mono,marginBottom:8}}>{isYahoo?"Yahoo Finance: real market data":isFred?"FRED: real sub-annual data":primarySrc?.short+": annual source"}</div>
+                {freqDefs.map(f=>(
                   <label key={f.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,cursor:"pointer"}}>
                     <input type="radio" name="freq" value={f.id} checked={freq===f.id} onChange={()=>setFreq(f.id)} style={{accentColor:C.gold}}/>
-                    <div>
-                      <div style={{color:freq===f.id?C.gold:C.text,fontSize:11,fontWeight:freq===f.id?700:400}}>{f.label}</div>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{color:freq===f.id?C.gold:C.text,fontSize:11,fontWeight:freq===f.id?700:400}}>{f.label}</span>
+                        {f.real?<span style={{fontSize:7,color:C.teal,background:`${C.teal}18`,borderRadius:3,padding:"1px 5px",fontFamily:C.mono}}>REAL</span>:<span style={{fontSize:7,color:C.orange,background:`${C.orange}18`,borderRadius:3,padding:"1px 5px",fontFamily:C.mono}}>EST</span>}
+                      </div>
                       <div style={{color:C.dim,fontSize:8,fontFamily:C.mono}}>{f.note}</div>
                     </div>
                   </label>
                 ))}
-                {freq!=="annual"&&(
+                {freqDefs.find(f=>f.id===freq&&!f.real)&&(
                   <div style={{background:`${C.orange}12`,border:`1px solid ${C.orange}33`,borderRadius:7,padding:"7px 10px",marginTop:4}}>
-                    <div style={{color:C.orange,fontSize:9,fontFamily:C.mono}}>⚠ Non-annual frequencies use linear interpolation between annual data points for most sources. FRED supports native monthly data.</div>
+                    <div style={{color:C.orange,fontSize:9,fontFamily:C.mono,lineHeight:1.5}}>⚠ This source only publishes annual data. Sub-annual points are linearly interpolated estimates — not real observations. For real market frequency, use the Yahoo Finance source.</div>
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {/* DAG Causal Analysis */}
             {analysisTab==="dag"&&(
