@@ -359,6 +359,26 @@ app.get("/api/proxy-data", (req, res) => {
   proxyGet(target, res, 5);
 });
 
+app.get("/api/egress-test", async (req, res) => {
+  const hosts = [
+    "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&date=2022:2023",
+    "https://ghoapi.azureedge.net/api/Dimension",
+    "https://api.github.com/zen",
+  ];
+  const testOne = (target) => new Promise((resolve) => {
+    const started = Date.now();
+    let u; try { u = new URL(target); } catch(e){ return resolve({target,ok:false,error:"parse"}); }
+    const client = u.protocol==="http:"?http:https;
+    const r = client.get(u,{headers:{"User-Agent":"EcoScope/2.0","Accept":"*/*"}},(up)=>{
+      let n=0; up.on("data",c=>n+=c.length); up.on("end",()=>resolve({host:u.hostname,status:up.statusCode,bytes:n,ms:Date.now()-started}));
+    });
+    r.on("error",(e)=>resolve({host:u.hostname,ok:false,code:e.code,error:e.message,ms:Date.now()-started}));
+    r.setTimeout(12000,()=>{r.destroy(new Error("timeout"));});
+  });
+  const results = await Promise.all(hosts.map(testOne));
+  res.json(results);
+});
+
 app.get("/api/proxy-test", (req, res) => {
   const testUrl = "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&date=2020:2023&per_page=100";
   const started = Date.now();
