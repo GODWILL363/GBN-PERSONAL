@@ -986,13 +986,19 @@ const proxyFetch = (targetUrl) => new Promise((resolve) => {
   _drainQueue();
 });
 
+// Worldwide Governance Indicators live in WB "source 3" and need &source=3
+const WGI_CODES = new Set(["CC.EST","RL.EST","GE.EST","VA.EST","RQ.EST","PV.EST","CC.PER.RNK","RL.PER.RNK","GE.PER.RNK","VA.PER.RNK","RQ.PER.RNK","PV.PER.RNK"]);
 const fetchWorldBank = async (cc, code, y0, y1) => {
   const ckey = `wb:${cc}:${code}:${y0}:${y1}`;
   const cached = cacheGet(ckey);
   if(cached) return cached;
+  const sourceParam = WGI_CODES.has(code) ? "&source=3" : "";
   try {
-    // Request a generous page size; WB returns newest-first. Don't over-restrict by date in URL.
-    const j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&per_page=500`);
+    let j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&per_page=500${sourceParam}`);
+    // If invalid-format error and we didn't already try source=3, retry with it
+    if ((!Array.isArray(j) || !j[1]) && !sourceParam) {
+      j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&per_page=500&source=3`);
+    }
     if (!Array.isArray(j) || !j[1]) return [];
     const result = j[1]
       .filter(d => {
@@ -1006,22 +1012,30 @@ const fetchWorldBank = async (cc, code, y0, y1) => {
   } catch (e) { console.error("[EcoScope] World Bank fetch failed:", ckey, e); return []; }
 };
 
+// IMF DataMapper API is now blocked by Akamai WAF (403 for all servers).
+// Fall back to World Bank equivalents for the common WEO indicators.
+const IMF_TO_WB = {
+  "NGDP_RPCH": "NY.GDP.MKTP.KD.ZG",   // Real GDP growth %
+  "PCPIPCH":   "FP.CPI.TOTL.ZG",       // Inflation, CPI %
+  "GGXWDG_NGDP":"GC.DOD.TOTL.GD.ZS",   // Govt gross debt % GDP
+  "BCA_NGDPD": "BN.CAB.XOKA.GD.ZS",    // Current account balance % GDP
+  "LUR":       "SL.UEM.TOTL.ZS",       // Unemployment rate
+  "LP":        "SP.POP.TOTL",          // Population
+  "NGDPD":     "NY.GDP.MKTP.CD",       // GDP current USD
+  "NGDPDPC":   "NY.GDP.PCAP.CD",       // GDP per capita USD
+};
 const fetchIMF = async (cc, code, y0, y1) => {
   const ckey = `imf:${cc}:${code}:${y0}:${y1}`;
   const cached = cacheGet(ckey);
   if(cached) return cached;
-  try {
-    const iso3 = ISO3[cc] || cc;
-    const j = await proxyFetch(`https://www.imf.org/external/datamapper/api/v1/${code}/${iso3}`);
-    const data = j?.values?.[code]?.[iso3];
-    if (!data) return [];
-    const result = Object.entries(data)
-      .filter(([y, v]) => +y >= y0 && +y <= y1 && v != null)
-      .map(([y, v]) => ({year: parseInt(y), value: parseFloat(v)}))
-      .sort((a, b) => a.year - b.year);
-    if(result.length>0) cacheSet(ckey, result);
-    return result;
-  } catch (e) { console.error("[EcoScope] IMF fetch failed:", ckey, e); return []; }
+  // Route to World Bank equivalent (IMF direct API is WAF-blocked server-side)
+  const wbCode = IMF_TO_WB[code];
+  if (wbCode) {
+    const r = await fetchWorldBank(cc, wbCode, y0, y1);
+    if(r.length>0) cacheSet(ckey, r);
+    return r;
+  }
+  return [];
 };
 
 const fetchFRED = async (code, y0, y1, key) => {

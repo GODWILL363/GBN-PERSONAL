@@ -379,39 +379,6 @@ app.get("/api/proxy-data", (req, res) => {
   proxyGet(target, res, 5, 1);
 });
 
-app.get("/api/source-test", (req, res) => {
-  const tests = {
-    "WB (works)": "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&per_page=5",
-    "GPI (VC.IHR)": "https://api.worldbank.org/v2/country/GH/indicator/VC.IHR.PSRC.P5?format=json&per_page=5",
-    "GPI (CC.EST)": "https://api.worldbank.org/v2/country/GH/indicator/CC.EST?format=json&per_page=5",
-    "FAO (AG.PRD)": "https://api.worldbank.org/v2/country/GH/indicator/AG.PRD.FOOD.XD?format=json&per_page=5",
-    "IMF (NGDP)": "https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/GHA",
-    "WHO (life exp)": "https://ghoapi.azureedge.net/api/WHOSIS_000001?$filter=SpatialDim eq 'GHA'&$top=3",
-  };
-  const doTest = (url) => new Promise((resolve) => {
-    let u; try { u=new URL(url);}catch(e){return resolve({err:"parse"});}
-    const client=u.protocol==="http:"?http:https;
-    const r=client.get(u,{headers:{"User-Agent":"Mozilla/5.0 EcoScope","Accept":"application/json"},family:4},(up)=>{
-      let data=""; up.on("data",c=>data+=c);
-      up.on("end",()=>{
-        let parsed=null,rows=0;
-        try{parsed=JSON.parse(data);}catch{}
-        if(Array.isArray(parsed)&&parsed[1]) rows=parsed[1].filter(d=>d.value!=null).length;
-        else if(parsed?.values) rows=Object.keys(parsed.values[Object.keys(parsed.values)[0]]||{}).length;
-        else if(parsed?.value) rows=parsed.value.length;
-        resolve({status:up.statusCode,bytes:data.length,dataRows:rows,sample:data.substring(0,120)});
-      });
-    });
-    r.on("error",e=>resolve({err:e.message,code:e.code}));
-    r.setTimeout(20000,()=>{r.destroy(new Error("timeout"));});
-  });
-  (async()=>{
-    const out={};
-    for(const [name,url] of Object.entries(tests)){ out[name]=await doTest(url); }
-    res.json(out);
-  })();
-});
-
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok", version: "2.0",
