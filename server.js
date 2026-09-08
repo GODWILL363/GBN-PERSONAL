@@ -322,28 +322,41 @@ const PROXY_ALLOWED_HOSTS = new Set([
   "ghoapi.azureedge.net",
 ]);
 
-app.get("/api/proxy-data", (req, res) => {
-  const target = req.query.url;
-  if (!target) return res.status(400).json({ error: "Missing url parameter" });
+function proxyGet(target, res, redirectsLeft) {
   let urlObj;
   try { urlObj = new URL(target); } catch { return res.status(400).json({ error: "Invalid URL" }); }
   if (!PROXY_ALLOWED_HOSTS.has(urlObj.hostname)) {
     return res.status(403).json({ error: `Host not allowed: ${urlObj.hostname}` });
   }
   const client = urlObj.protocol === "http:" ? http : https;
-  const proxyReq = client.get(urlObj, (proxyRes) => {
+  const upstreamReq = client.get(urlObj, {
+    headers: { "User-Agent": "EcoScope/2.0", "Accept": "application/json" }
+  }, (upstreamRes) => {
+    const status = upstreamRes.statusCode || 200;
+    // Follow redirects (World Bank & others use 301/302/307/308)
+    if ([301,302,303,307,308].includes(status) && upstreamRes.headers.location && redirectsLeft > 0) {
+      upstreamRes.resume(); // discard body
+      const next = new URL(upstreamRes.headers.location, urlObj).toString();
+      return proxyGet(next, res, redirectsLeft - 1);
+    }
     let data = "";
-    proxyRes.on("data", c => data += c);
-    proxyRes.on("end", () => {
+    upstreamRes.on("data", c => data += c);
+    upstreamRes.on("end", () => {
       res.setHeader("Content-Type", "application/json");
-      res.status(proxyRes.statusCode || 200).send(data);
+      res.status(status).send(data);
     });
   });
-  proxyReq.on("error", (e) => {
+  upstreamReq.on("error", (e) => {
     console.error("[proxy-data] error fetching", target, e.message);
     res.status(502).json({ error: "Upstream fetch failed", detail: e.message });
   });
-  proxyReq.setTimeout(15000, () => { proxyReq.destroy(new Error("Upstream request timed out")); });
+  upstreamReq.setTimeout(15000, () => { upstreamReq.destroy(new Error("Upstream request timed out")); });
+}
+
+app.get("/api/proxy-data", (req, res) => {
+  const target = req.query.url;
+  if (!target) return res.status(400).json({ error: "Missing url parameter" });
+  proxyGet(target, res, 5);
 });
 
 app.get("/api/health", (req, res) => {
