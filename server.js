@@ -330,9 +330,19 @@ function proxyGet(target, res, redirectsLeft, attempt) {
   }
   const client = urlObj.protocol === "http:" ? http : https;
   let settled = false;
-  const upstreamReq = client.get(urlObj, {
-    headers: { "User-Agent": "EcoScope/2.0", "Accept": "application/json" }
-  }, (upstreamRes) => {
+  const options = {
+    hostname: urlObj.hostname,
+    path: urlObj.pathname + urlObj.search,
+    method: "GET",
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; EcoScope/2.0)",
+      "Accept": "application/json",
+      "Connection": "close",
+    },
+    // Prefer IPv4 — some data-center IPv6 routes to World Bank hang
+    family: 4,
+  };
+  const upstreamReq = client.request(options, (upstreamRes) => {
     const status = upstreamRes.statusCode || 200;
     if ([301,302,303,307,308].includes(status) && upstreamRes.headers.location && redirectsLeft > 0) {
       upstreamRes.resume();
@@ -342,6 +352,7 @@ function proxyGet(target, res, redirectsLeft, attempt) {
     let data = "";
     upstreamRes.on("data", c => data += c);
     upstreamRes.on("end", () => {
+      if (settled) return;
       settled = true;
       res.setHeader("Content-Type", "application/json");
       res.status(status).send(data);
@@ -350,15 +361,16 @@ function proxyGet(target, res, redirectsLeft, attempt) {
   const failOrRetry = (msg) => {
     if (settled) return;
     settled = true;
-    if (attempt < 2) {
-      // one automatic retry for slow/cold upstreams (e.g. World Bank)
-      return proxyGet(target, res, 5, attempt + 1);
+    if (attempt < 4) {
+      const backoff = 400 * attempt;
+      return setTimeout(()=>proxyGet(target, res, 5, attempt + 1), backoff);
     }
     console.error("[proxy-data] failed:", target, msg);
     res.status(502).json({ error: "Upstream fetch failed", detail: msg });
   };
   upstreamReq.on("error", (e) => failOrRetry(e.message));
-  upstreamReq.setTimeout(25000, () => { upstreamReq.destroy(new Error("Upstream request timed out")); });
+  upstreamReq.setTimeout(12000, () => { upstreamReq.destroy(new Error("timeout")); });
+  upstreamReq.end();
 }
 
 app.get("/api/proxy-data", (req, res) => {

@@ -952,10 +952,39 @@ const cacheClearAll = () => _dataCache.clear();
 
 // Route external economic-data API calls through our own server (same-origin)
 // to avoid browser CORS failures from third-party providers.
-const proxyFetch = async (targetUrl) => {
-  const r = await fetch(`/api/proxy-data?url=${encodeURIComponent(targetUrl)}`);
-  return r.json();
+// Global concurrency gate — limits simultaneous upstream requests to avoid
+// third-party rate-limiting/throttling (World Bank drops bursts of parallel calls).
+let _activeRequests = 0;
+const _requestQueue = [];
+const MAX_CONCURRENT = 3;
+const _drainQueue = () => {
+  while (_activeRequests < MAX_CONCURRENT && _requestQueue.length) {
+    const job = _requestQueue.shift();
+    job();
+  }
 };
+const proxyFetch = (targetUrl) => new Promise((resolve) => {
+  const run = async () => {
+    _activeRequests++;
+    try {
+      const r = await fetch(`/api/proxy-data?url=${encodeURIComponent(targetUrl)}`);
+      const text = await r.text();
+      // Guard against HTML error pages / empty bodies from flaky upstreams
+      if (!text || (text.trim()[0] !== "[" && text.trim()[0] !== "{")) {
+        resolve(null);
+      } else {
+        try { resolve(JSON.parse(text)); } catch { resolve(null); }
+      }
+    } catch (e) {
+      resolve(null);
+    } finally {
+      _activeRequests--;
+      _drainQueue();
+    }
+  };
+  _requestQueue.push(run);
+  _drainQueue();
+});
 
 const fetchWorldBank = async (cc, code, y0, y1) => {
   const ckey = `wb:${cc}:${code}:${y0}:${y1}`;
