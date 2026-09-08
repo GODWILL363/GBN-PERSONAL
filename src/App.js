@@ -991,10 +991,14 @@ const fetchWorldBank = async (cc, code, y0, y1) => {
   const cached = cacheGet(ckey);
   if(cached) return cached;
   try {
-    const j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&date=${y0}:${y1}&per_page=100`);
-    if (!j?.[1]) return [];
+    // Request a generous page size; WB returns newest-first. Don't over-restrict by date in URL.
+    const j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&per_page=500`);
+    if (!Array.isArray(j) || !j[1]) return [];
     const result = j[1]
-      .filter(d => parseInt(d.date) >= y0 && parseInt(d.date) <= y1)
+      .filter(d => {
+        const yr = parseInt(d.date);
+        return !isNaN(yr) && yr >= y0 && yr <= y1;
+      })
       .map(d => ({year: parseInt(d.date), value: d.value!=null ? parseFloat(d.value) : null}))
       .sort((a, b) => a.year - b.year);
     if(result.length>0) cacheSet(ckey, result);
