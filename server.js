@@ -322,93 +322,49 @@ const PROXY_ALLOWED_HOSTS = new Set([
   "ghoapi.azureedge.net",
 ]);
 
-function proxyGet(target, res, redirectsLeft) {
+function proxyGet(target, res, redirectsLeft, attempt) {
   let urlObj;
   try { urlObj = new URL(target); } catch { return res.status(400).json({ error: "Invalid URL" }); }
   if (!PROXY_ALLOWED_HOSTS.has(urlObj.hostname)) {
     return res.status(403).json({ error: `Host not allowed: ${urlObj.hostname}` });
   }
   const client = urlObj.protocol === "http:" ? http : https;
+  let settled = false;
   const upstreamReq = client.get(urlObj, {
     headers: { "User-Agent": "EcoScope/2.0", "Accept": "application/json" }
   }, (upstreamRes) => {
     const status = upstreamRes.statusCode || 200;
-    // Follow redirects (World Bank & others use 301/302/307/308)
     if ([301,302,303,307,308].includes(status) && upstreamRes.headers.location && redirectsLeft > 0) {
-      upstreamRes.resume(); // discard body
+      upstreamRes.resume();
       const next = new URL(upstreamRes.headers.location, urlObj).toString();
-      return proxyGet(next, res, redirectsLeft - 1);
+      return proxyGet(next, res, redirectsLeft - 1, attempt);
     }
     let data = "";
     upstreamRes.on("data", c => data += c);
     upstreamRes.on("end", () => {
+      settled = true;
       res.setHeader("Content-Type", "application/json");
       res.status(status).send(data);
     });
   });
-  upstreamReq.on("error", (e) => {
-    console.error("[proxy-data] error fetching", target, e.message);
-    res.status(502).json({ error: "Upstream fetch failed", detail: e.message });
-  });
-  upstreamReq.setTimeout(15000, () => { upstreamReq.destroy(new Error("Upstream request timed out")); });
+  const failOrRetry = (msg) => {
+    if (settled) return;
+    settled = true;
+    if (attempt < 2) {
+      // one automatic retry for slow/cold upstreams (e.g. World Bank)
+      return proxyGet(target, res, 5, attempt + 1);
+    }
+    console.error("[proxy-data] failed:", target, msg);
+    res.status(502).json({ error: "Upstream fetch failed", detail: msg });
+  };
+  upstreamReq.on("error", (e) => failOrRetry(e.message));
+  upstreamReq.setTimeout(25000, () => { upstreamReq.destroy(new Error("Upstream request timed out")); });
 }
 
 app.get("/api/proxy-data", (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).json({ error: "Missing url parameter" });
-  proxyGet(target, res, 5);
-});
-
-app.get("/api/egress-test", async (req, res) => {
-  const hosts = [
-    "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&date=2022:2023",
-    "https://ghoapi.azureedge.net/api/Dimension",
-    "https://api.github.com/zen",
-  ];
-  const testOne = (target) => new Promise((resolve) => {
-    const started = Date.now();
-    let u; try { u = new URL(target); } catch(e){ return resolve({target,ok:false,error:"parse"}); }
-    const client = u.protocol==="http:"?http:https;
-    const r = client.get(u,{headers:{"User-Agent":"EcoScope/2.0","Accept":"*/*"}},(up)=>{
-      let n=0; up.on("data",c=>n+=c.length); up.on("end",()=>resolve({host:u.hostname,status:up.statusCode,bytes:n,ms:Date.now()-started}));
-    });
-    r.on("error",(e)=>resolve({host:u.hostname,ok:false,code:e.code,error:e.message,ms:Date.now()-started}));
-    r.setTimeout(12000,()=>{r.destroy(new Error("timeout"));});
-  });
-  const results = await Promise.all(hosts.map(testOne));
-  res.json(results);
-});
-
-app.get("/api/proxy-test", (req, res) => {
-  const testUrl = "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&date=2020:2023&per_page=100";
-  const started = Date.now();
-  const doGet = (target, redirectsLeft) => {
-    let u;
-    try { u = new URL(target); } catch(e){ return res.json({ok:false,stage:"parse",error:e.message}); }
-    const client = u.protocol === "http:" ? http : https;
-    const r = client.get(u, { headers:{ "User-Agent":"EcoScope/2.0","Accept":"application/json" } }, (up) => {
-      const status = up.statusCode;
-      if ([301,302,303,307,308].includes(status) && up.headers.location && redirectsLeft>0) {
-        up.resume();
-        return doGet(new URL(up.headers.location, u).toString(), redirectsLeft-1);
-      }
-      let data="";
-      up.on("data",c=>data+=c);
-      up.on("end",()=>{
-        res.json({
-          ok: status===200,
-          status,
-          ms: Date.now()-started,
-          bytes: data.length,
-          sample: data.substring(0,200),
-          finalUrl: u.toString(),
-        });
-      });
-    });
-    r.on("error",(e)=>res.json({ok:false,stage:"network",error:e.message,code:e.code,ms:Date.now()-started}));
-    r.setTimeout(15000,()=>{ r.destroy(new Error("timeout")); });
-  };
-  doGet(testUrl, 5);
+  proxyGet(target, res, 5, 1);
 });
 
 app.get("/api/health", (req, res) => {
