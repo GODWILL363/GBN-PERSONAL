@@ -2481,6 +2481,7 @@ function Dashboard({user, onLogout}) {
   const [chartType,setChartType]=useState("area");
   const [distVar,setDistVar]=useState(0);
   const [animate,setAnimate]=useState(false);
+  const [animTick,setAnimTick]=useState(0);
   const [distCurveType,setDistCurveType]=useState("normal"); // normal | skew | histogram
   const [viewMode,setViewMode]=useState("chart");
 
@@ -3064,12 +3065,19 @@ function Dashboard({user, onLogout}) {
       const activeCurve = distCurveType==="skew" ? skewed : normal;
       const maxDens=Math.max(...activeCurve.map(c=>c.density),0.0001);
       const curveData=activeCurve.map(c=>({x:c.x, y:c.density}));
-      // Histogram (for histogram type) scaled to overlay
+      // Histogram (for histogram type) — merge bars + fitted curve into ONE aligned dataset
       const hist=histogram(series,20);
       const maxCount=Math.max(...hist.map(h=>h.count),1);
-      const histData=hist.map(h=>({x:h.bin, count:h.count, dens:(normalCurve(s.mean,s.std,1)&&0)}));
-      // Scale normal curve to counts for histogram overlay
-      const curveForHist=(distCurveType==="skew"?skewed:normal).map(c=>({x:c.x, curve:(c.density/maxDens)*maxCount}));
+      const binWidth = hist.length>1 ? (hist[1].bin-hist[0].bin) : s.std;
+      // For each histogram bin, compute the fitted-curve height at that bin center (scaled to counts)
+      const fitCurve = distCurveType==="skew"?skewed:normal;
+      const curveAt = (x)=>{
+        // nearest curve point density
+        let nearest=fitCurve[0], best=Infinity;
+        for(const c of fitCurve){ const d=Math.abs(c.x-x); if(d<best){best=d;nearest=c;} }
+        return (nearest.density/maxDens)*maxCount;
+      };
+      const histData = hist.map(h=>({x:h.bin, count:h.count, curve:curveAt(h.bin)}));
       const sigmaMarks=[-3,-2,-1,0,1,2,3].map(k=>({
         k, x:s.mean+k*s.std,
         label:k===0?"Mean (μ)":`μ ${k>0?"+":"-"} ${Math.abs(k)}σ`,
@@ -3094,7 +3102,7 @@ function Dashboard({user, onLogout}) {
             {[["normal","Normal Bell"],["skew","Skew-adjusted"],["histogram","Histogram + Curve"]].map(([id,label])=>(
               <button key={id} onClick={()=>setDistCurveType(id)} style={{padding:"4px 10px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${distCurveType===id?C.teal:C.border}`,background:distCurveType===id?`${C.teal}22`:"transparent",color:distCurveType===id?C.teal:C.mid,fontWeight:distCurveType===id?700:400}}>{label}</button>
             ))}
-            <button onClick={()=>setAnimate(a=>!a)} style={{marginLeft:"auto",padding:"4px 12px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${animate?C.gold:C.border}`,background:animate?`${C.gold}22`:"transparent",color:animate?C.gold:C.mid,fontWeight:700}}>{animate?"⏸ Animating":"▶ Animate"}</button>
+            <button onClick={()=>{setAnimate(true);setAnimTick(t=>t+1);}} style={{marginLeft:"auto",padding:"4px 12px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${C.gold}`,background:`${C.gold}22`,color:C.gold,fontWeight:700}}>▶ {animTick>0?"Replay":"Animate"}</button>
           </div>
           {/* Stats bar */}
           <div style={{display:"flex",flexWrap:"nowrap",alignItems:"center",gap:10,marginBottom:10,padding:"7px 12px",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,fontFamily:C.mono,fontSize:10,overflowX:"auto",whiteSpace:"nowrap"}}>
@@ -3107,12 +3115,13 @@ function Dashboard({user, onLogout}) {
           <div style={{background:"#05070f",borderRadius:10,padding:"16px 10px 8px",border:`1px solid ${C.border}`}}>
             {distCurveType==="histogram" ? (
               <ResponsiveContainer width="100%" height={300}>
-                <ComposedChart data={curveForHist} margin={{top:20,right:20,left:10,bottom:10}}>
-                  <XAxis dataKey="x" type="number" domain={["dataMin","dataMax"]} tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}} axisLine={{stroke:"#2a3350"}} tickLine={false} tickFormatter={v=>fmtVal(v,vd.fmt)} height={36}/>
-                  <YAxis tick={{fill:"#9aa5c4",fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={40}/>
-                  <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:10}}/>
-                  <Bar data={hist.map(h=>({x:h.bin,count:h.count}))} dataKey="count" fill={vcolor} opacity={0.85} isAnimationActive={animate} animationDuration={animate?1200:0}/>
-                  <Line dataKey="curve" stroke={C.teal} strokeWidth={2.5} dot={false} type="monotone" isAnimationActive={animate} animationDuration={animate?1600:0}/>
+                <ComposedChart data={histData} margin={{top:20,right:20,left:10,bottom:10}}>
+                  <CartesianGrid stroke="#182038" strokeDasharray="3 3" vertical={false}/>
+                  <XAxis dataKey="x" type="number" scale="linear" domain={["dataMin","dataMax"]} tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}} axisLine={{stroke:"#2a3350"}} tickLine={false} tickFormatter={v=>fmtVal(v,vd.fmt)} height={36}/>
+                  <YAxis tick={{fill:"#9aa5c4",fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={40} label={{value:"Frequency",angle:-90,position:"insideLeft",fill:"#7a88b0",fontSize:8,fontFamily:C.mono}}/>
+                  <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:10}} labelFormatter={v=>`x = ${fmtVal(v,vd.fmt)}`}/>
+                  <Bar dataKey="count" name="Observed frequency" fill={vcolor} opacity={0.85} isAnimationActive={animate} animationDuration={animate?1200:0} maxBarSize={40}/>
+                  <Line dataKey="curve" name="Fitted curve" stroke={C.teal} strokeWidth={2.5} dot={false} type="monotone" isAnimationActive={animate} animationDuration={animate?1600:0}/>
                 </ComposedChart>
               </ResponsiveContainer>
             ) : (
@@ -3780,7 +3789,7 @@ function Dashboard({user, onLogout}) {
                   </button>
                 ))}
                 {(chartType==="area"||chartType==="line"||chartType==="bar")&&(
-                  <button onClick={()=>setAnimate(a=>!a)} style={{...pill(animate,C.gold),fontSize:10}}>{animate?"⏸ Animating":"▶ Animate"}</button>
+                  <button onClick={()=>{setAnimate(true);setAnimTick(t=>t+1);}} style={{...pill(animate,C.gold),fontSize:10}}>▶ {animate?"Replay":"Animate"}</button>
                 )}
                 {varCodes.length>1&&(
                   <div style={{background:`${C.purple}20`,border:`1px solid ${C.purple}44`,borderRadius:20,padding:"3px 9px",fontSize:9,color:C.purple,fontFamily:C.mono,fontWeight:700}}>
@@ -3856,7 +3865,7 @@ function Dashboard({user, onLogout}) {
                     })}
                   </div>
                 )}
-              <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()} style={{overflow:"hidden",maxWidth:"100%"}}>
+              <div id="ecoscope-chart-area" key={chartType+[...hiddenChartVars].join()+":"+animTick+":"+distCurveType+":"+distVar} style={{overflow:"hidden",maxWidth:"100%"}}>
                 {(chartType==="stats"||chartType==="dist")?(
                   <div id="scroll-statsview" style={{maxHeight:isMobile?360:440,overflowY:"auto",overflowX:"hidden"}}>{renderChart()}</div>
                 ):(
