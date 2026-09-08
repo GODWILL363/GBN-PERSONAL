@@ -947,6 +947,8 @@ const cacheGet = (key) => {
   return entry.data;
 };
 const cacheSet = (key, data) => _dataCache.set(key, {data, ts:Date.now()});
+const cacheClearPrefix = (prefix) => { for(const k of [..._dataCache.keys()]) if(k.startsWith(prefix)) _dataCache.delete(k); };
+const cacheClearAll = () => _dataCache.clear();
 
 const fetchWorldBank = async (cc, code, y0, y1) => {
   const ckey = `wb:${cc}:${code}:${y0}:${y1}`;
@@ -955,12 +957,12 @@ const fetchWorldBank = async (cc, code, y0, y1) => {
   try {
     const r = await fetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&date=${y0}:${y1}&per_page=100`);
     const j = await r.json();
-    if (!j?.[1]) { cacheSet(ckey,[]); return []; }
+    if (!j?.[1]) return [];
     const result = j[1]
       .filter(d => parseInt(d.date) >= y0 && parseInt(d.date) <= y1)
       .map(d => ({year: parseInt(d.date), value: d.value!=null ? parseFloat(d.value) : null}))
       .sort((a, b) => a.year - b.year);
-    cacheSet(ckey, result);
+    if(result.length>0) cacheSet(ckey, result);
     return result;
   } catch { return []; }
 };
@@ -974,12 +976,12 @@ const fetchIMF = async (cc, code, y0, y1) => {
     const r = await fetch(`https://www.imf.org/external/datamapper/api/v1/${code}/${iso3}`);
     const j = await r.json();
     const data = j?.values?.[code]?.[iso3];
-    if (!data) { cacheSet(ckey,[]); return []; }
+    if (!data) return [];
     const result = Object.entries(data)
       .filter(([y, v]) => +y >= y0 && +y <= y1 && v != null)
       .map(([y, v]) => ({year: parseInt(y), value: parseFloat(v)}))
       .sort((a, b) => a.year - b.year);
-    cacheSet(ckey, result);
+    if(result.length>0) cacheSet(ckey, result);
     return result;
   } catch { return []; }
 };
@@ -993,12 +995,12 @@ const fetchFRED = async (code, y0, y1, key) => {
     const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${code}&api_key=${key}&file_type=json&observation_start=${y0}-01-01&observation_end=${y1}-12-31&frequency=a&aggregation_method=avg`;
     const r = await fetch(url);
     const j = await r.json();
-    if (!j?.observations) { cacheSet(ckey,[]); return []; }
+    if (!j?.observations) return [];
     const result = j.observations
       .filter(o => o.value !== '.' && o.value != null)
       .map(o => ({year: parseInt(o.date.substring(0, 4)), value: parseFloat(o.value)}))
       .sort((a, b) => a.year - b.year);
-    cacheSet(ckey, result);
+    if(result.length>0) cacheSet(ckey, result);
     return result;
   } catch { return []; }
 };
@@ -1012,12 +1014,12 @@ const fetchWHO = async (cc, code, y0, y1) => {
     const url = `https://ghoapi.azureedge.net/api/${code}?$filter=SpatialDim eq '${iso3}' and TimeDim ge ${y0} and TimeDim le ${y1}&$select=TimeDim,NumericValue&$orderby=TimeDim`;
     const r = await fetch(url);
     const j = await r.json();
-    if (!j?.value) { cacheSet(ckey,[]); return []; }
+    if (!j?.value) return [];
     const result = j.value
       .filter(d => d.NumericValue != null)
       .map(d => ({year: d.TimeDim, value: d.NumericValue}))
       .sort((a, b) => a.year - b.year);
-    cacheSet(ckey, result);
+    if(result.length>0) cacheSet(ckey, result);
     return result;
   } catch { return []; }
 };
@@ -2486,6 +2488,22 @@ function Dashboard({user, onLogout}) {
 
   useEffect(()=>{loadData();},[loadData]);
 
+  // Force refresh: clears cached entries for the current basket/country/range and refetches
+  const forceRefresh = useCallback(()=>{
+    varBasket.forEach(item=>{
+      if(item.sourceId==="__imported__") return;
+      const src2 = ALL_SRCS_MAP[item.sourceId];
+      const vd = src2?.vars.find(v=>v.code===item.varCode);
+      const api = vd?.api || item.sourceId;
+      const cc2 = src2?.countryFixed || effCountry;
+      cacheClearPrefix(`${api}:${cc2}:`);
+      cacheClearPrefix(`${api}:${item.varCode}:`); // for FRED (no country in key)
+      if(cmpOn) cacheClearPrefix(`${api}:${cmpCountry}:`);
+    });
+    setNoDataVars(new Set());
+    loadData();
+  },[varBasket,effCountry,cmpOn,cmpCountry,loadData]);
+
   // Reprocess (transform/impute) purely client-side — NO network calls, instant on Apply
   useEffect(()=>{
     setData(applyTransform(imputeData(rawData, appliedImpute), appliedTransform));
@@ -2996,6 +3014,11 @@ function Dashboard({user, onLogout}) {
           <div style={{fontSize:10,color:C.dim,fontFamily:C.mono}}>{source.short} · {cc.flag} {cc.name} · {currentVar.name.substring(0,30)} · {startYear}–{endYear}</div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,position:"relative"}}>
+          {/* Global reload button */}
+          <button onClick={forceRefresh} disabled={loading} title="Reload data" style={{background:"none",border:`1px solid ${loading?C.teal:C.border}`,borderRadius:8,color:loading?C.teal:C.mid,cursor:loading?"wait":"pointer",padding:isMobile?"7px 9px":"7px 11px",fontSize:isMobile?13:12,display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <span style={{display:"inline-block",animation:loading?"spin 0.8s linear infinite":"none"}}>↻</span>
+            {!isMobile&&<span style={{fontFamily:C.mono,fontSize:11}}>{loading?"Loading…":"Reload"}</span>}
+          </button>
           {/* User avatar button */}
           <div style={{position:"relative"}}>
             <button onClick={()=>setShowUserMenu(v=>!v)} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${showUserMenu?C.gold:C.border}`,borderRadius:20,padding:"5px 14px 5px 6px",cursor:"pointer",transition:"border-color .15s"}}>
@@ -3541,6 +3564,7 @@ function Dashboard({user, onLogout}) {
                   {viewMode==="chart"?"⊞ Table":"◫ Chart"}
                 </button>
                 <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  <button onClick={forceRefresh} disabled={loading} style={{...pill(false),color:C.teal,borderColor:`${C.teal}44`,fontSize:10,opacity:loading?0.5:1,cursor:loading?"wait":"pointer"}}>{loading?"⟳":"↻"} Refresh</button>
                   <ExportMenu data={data} currentVar={currentVar} cc={cc} source={source} startYear={startYear} endYear={endYear} plan={plan} onUpgradeNeeded={(f)=>setUpgradeModal({feature:f,requiredPlan:"pro"})}/>
                   <div style={{position:"relative"}}>
                     <button onClick={()=>document.getElementById("chartExportMenu").style.display==="none"?document.getElementById("chartExportMenu").style.display="block":document.getElementById("chartExportMenu").style.display="none"} style={{...pill(false),color:C.blue,borderColor:`${C.blue}44`,fontSize:10}}>📷 Snapshot</button>
@@ -3569,10 +3593,11 @@ function Dashboard({user, onLogout}) {
                 <span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>⟳</span> Fetching from {source.name}…
               </div>
             ) : !data.length ? (
-              <div style={{height:320,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono,fontSize:12,gap:8}}>
+              <div style={{height:320,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono,fontSize:12,gap:10}}>
                 <span style={{fontSize:30}}>◌</span>
                 <span>No data available for this selection</span>
                 {source.keyRequired&&!settings.fredKey&&<span style={{color:C.red,fontSize:11}}>⚠ FRED API key required — add in Settings</span>}
+                <button onClick={forceRefresh} disabled={loading} style={{...btn(C.teal),padding:"8px 18px",fontSize:11,marginTop:4,opacity:loading?0.6:1,cursor:loading?"wait":"pointer"}}>{loading?"⟳ Retrying…":"↻ Retry Now"}</button>
               </div>
             ) : viewMode==="chart" ? (
               <div>
