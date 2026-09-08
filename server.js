@@ -359,6 +359,38 @@ app.get("/api/proxy-data", (req, res) => {
   proxyGet(target, res, 5);
 });
 
+app.get("/api/proxy-test", (req, res) => {
+  const testUrl = "https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json&date=2020:2023&per_page=100";
+  const started = Date.now();
+  const doGet = (target, redirectsLeft) => {
+    let u;
+    try { u = new URL(target); } catch(e){ return res.json({ok:false,stage:"parse",error:e.message}); }
+    const client = u.protocol === "http:" ? http : https;
+    const r = client.get(u, { headers:{ "User-Agent":"EcoScope/2.0","Accept":"application/json" } }, (up) => {
+      const status = up.statusCode;
+      if ([301,302,303,307,308].includes(status) && up.headers.location && redirectsLeft>0) {
+        up.resume();
+        return doGet(new URL(up.headers.location, u).toString(), redirectsLeft-1);
+      }
+      let data="";
+      up.on("data",c=>data+=c);
+      up.on("end",()=>{
+        res.json({
+          ok: status===200,
+          status,
+          ms: Date.now()-started,
+          bytes: data.length,
+          sample: data.substring(0,200),
+          finalUrl: u.toString(),
+        });
+      });
+    });
+    r.on("error",(e)=>res.json({ok:false,stage:"network",error:e.message,code:e.code,ms:Date.now()-started}));
+    r.setTimeout(15000,()=>{ r.destroy(new Error("timeout")); });
+  };
+  doGet(testUrl, 5);
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok", version: "2.0",
