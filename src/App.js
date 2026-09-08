@@ -1352,6 +1352,39 @@ const normalCurve = (mean, std, nPoints=60) => {
   return pts;
 };
 
+// Skew-normal curve — reflects the actual skewness of the data (shifts left/right)
+const skewNormalCurve = (mean, std, skew, nPoints=80) => {
+  if(!std||std<=0) return [];
+  // Convert sample skewness to skew-normal shape parameter alpha (bounded for stability)
+  const s = Math.max(-0.95, Math.min(0.95, skew/2));
+  const absS = Math.abs(s);
+  const num = absS**(2/3);
+  const delta = Math.sign(s) * Math.sqrt((Math.PI/2)*num / (num + ((4-Math.PI)/2)**(2/3)));
+  const alpha = delta / Math.sqrt(Math.max(1e-6, 1 - delta*delta));
+  // Adjust location & scale so the plotted curve keeps the data's mean & std
+  const omega = std / Math.sqrt(Math.max(1e-6, 1 - 2*delta*delta/Math.PI));
+  const xi = mean - omega*delta*Math.sqrt(2/Math.PI);
+  const phi = (z)=> (1/Math.sqrt(2*Math.PI))*Math.exp(-0.5*z*z);
+  const Phi = (z)=> 0.5*(1+erf(z/Math.SQRT2));
+  const lo=mean-4*std, hi=mean+4*std;
+  const pts=[];
+  for(let i=0;i<nPoints;i++){
+    const x=lo+(hi-lo)*i/(nPoints-1);
+    const z=(x-xi)/omega;
+    const y=(2/omega)*phi(z)*Phi(alpha*z);
+    pts.push({x:parseFloat(x.toFixed(4)), density:parseFloat(Math.max(0,y).toFixed(8))});
+  }
+  return pts;
+};
+
+// Error function approximation (Abramowitz & Stegun 7.1.26) for skew-normal CDF
+function erf(x){
+  const sign = x<0?-1:1; x=Math.abs(x);
+  const t=1/(1+0.3275911*x);
+  const y=1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-0.284496736)*t+0.254829592)*t*Math.exp(-x*x);
+  return sign*y;
+}
+
 // Histogram bins for actual data distribution
 const histogram = (data, bins=12) => {
   const vals=data.filter(d=>d.value!=null&&!isNaN(d.value)).map(d=>d.value);
@@ -2447,6 +2480,8 @@ function Dashboard({user, onLogout}) {
   // Chart
   const [chartType,setChartType]=useState("area");
   const [distVar,setDistVar]=useState(0);
+  const [animate,setAnimate]=useState(false);
+  const [distCurveType,setDistCurveType]=useState("normal"); // normal | skew | histogram
   const [viewMode,setViewMode]=useState("chart");
 
   // Compare
@@ -3022,79 +3057,87 @@ function Dashboard({user, onLogout}) {
       const series=applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
       const s=summaryStats(series);
       if(!s||!s.std) return <div style={{height:260,display:"flex",alignItems:"center",justifyContent:"center",color:C.dim,fontFamily:C.mono}}>No data to plot</div>;
-      const curve=normalCurve(s.mean,s.std,120);
-      const maxDens=Math.max(...curve.map(c=>c.density))||1;
-      const curveData=curve.map(c=>({x:c.x, y:c.density}));
+      const vcolor=ACCENT[di%ACCENT.length];
+      // Choose curve based on selected type
+      const normal=normalCurve(s.mean,s.std,120);
+      const skewed=skewNormalCurve(s.mean,s.std,s.skew,120);
+      const activeCurve = distCurveType==="skew" ? skewed : normal;
+      const maxDens=Math.max(...activeCurve.map(c=>c.density),0.0001);
+      const curveData=activeCurve.map(c=>({x:c.x, y:c.density}));
+      // Histogram (for histogram type) scaled to overlay
+      const hist=histogram(series,20);
+      const maxCount=Math.max(...hist.map(h=>h.count),1);
+      const histData=hist.map(h=>({x:h.bin, count:h.count, dens:(normalCurve(s.mean,s.std,1)&&0)}));
+      // Scale normal curve to counts for histogram overlay
+      const curveForHist=(distCurveType==="skew"?skewed:normal).map(c=>({x:c.x, curve:(c.density/maxDens)*maxCount}));
       const sigmaMarks=[-3,-2,-1,0,1,2,3].map(k=>({
         k, x:s.mean+k*s.std,
-        y:(1/(s.std*Math.sqrt(2*Math.PI)))*Math.exp(-0.5*k*k),
         label:k===0?"Mean (μ)":`μ ${k>0?"+":"-"} ${Math.abs(k)}σ`,
       }));
       return(
         <div>
-          {/* Variable selector for distribution */}
+          {/* Variable selector */}
           {allVarDefs.length>1&&(
-            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:10}}>
-              <span style={{color:C.dim,fontSize:8,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",width:"100%",marginBottom:2}}>Select variable for distribution:</span>
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:8}}>
+              <span style={{color:C.dim,fontSize:8,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",width:"100%",marginBottom:2}}>Variable:</span>
               {allVarDefs.map((v,i)=>(
-                <button key={i} onClick={()=>setDistVar(i)} style={{
-                  display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,
-                  border:`1px solid ${i===di?ACCENT[i%ACCENT.length]:C.border}`,
-                  background:i===di?`${ACCENT[i%ACCENT.length]}22`:"transparent",
-                  color:i===di?ACCENT[i%ACCENT.length]:C.mid,
-                  fontWeight:i===di?700:400,
-                }}>
+                <button key={i} onClick={()=>setDistVar(i)} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 10px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${i===di?ACCENT[i%ACCENT.length]:C.border}`,background:i===di?`${ACCENT[i%ACCENT.length]}22`:"transparent",color:i===di?ACCENT[i%ACCENT.length]:C.mid,fontWeight:i===di?700:400}}>
                   <span style={{width:8,height:8,borderRadius:"50%",background:ACCENT[i%ACCENT.length],flexShrink:0}}/>
                   {v.name.substring(0,16)}
                 </button>
               ))}
             </div>
           )}
+          {/* Curve type + animate controls */}
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8,alignItems:"center"}}>
+            <span style={{color:C.dim,fontSize:8,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em"}}>Curve:</span>
+            {[["normal","Normal Bell"],["skew","Skew-adjusted"],["histogram","Histogram + Curve"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setDistCurveType(id)} style={{padding:"4px 10px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${distCurveType===id?C.teal:C.border}`,background:distCurveType===id?`${C.teal}22`:"transparent",color:distCurveType===id?C.teal:C.mid,fontWeight:distCurveType===id?700:400}}>{label}</button>
+            ))}
+            <button onClick={()=>setAnimate(a=>!a)} style={{marginLeft:"auto",padding:"4px 12px",borderRadius:20,cursor:"pointer",fontFamily:C.mono,fontSize:9,border:`1px solid ${animate?C.gold:C.border}`,background:animate?`${C.gold}22`:"transparent",color:animate?C.gold:C.mid,fontWeight:700}}>{animate?"⏸ Animating":"▶ Animate"}</button>
+          </div>
+          {/* Stats bar */}
           <div style={{display:"flex",flexWrap:"nowrap",alignItems:"center",gap:10,marginBottom:10,padding:"7px 12px",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,fontFamily:C.mono,fontSize:10,overflowX:"auto",whiteSpace:"nowrap"}}>
-            <span style={{color:ACCENT[di%ACCENT.length],fontWeight:700,flexShrink:0}}>{vd.name.substring(0,20)}</span>
+            <span style={{color:vcolor,fontWeight:700,flexShrink:0}}>{vd.name.substring(0,20)}</span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>μ=</span><span style={{color:C.text}}>{fmtVal(s.mean,vd.fmt)}</span></span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>σ=</span><span style={{color:C.text}}>{fmtVal(s.std,vd.fmt)}</span></span>
             <span style={{flexShrink:0}}><span style={{color:C.dim}}>skew=</span><span style={{color:Math.abs(s.skew)>1?C.red:C.text}}>{s.skew.toFixed(3)}</span></span>
-            <span style={{padding:"2px 8px",borderRadius:4,fontSize:8,fontWeight:700,flexShrink:0,background:Math.abs(s.skew)<0.5?`${C.teal}18`:`${C.orange}18`,color:Math.abs(s.skew)<0.5?C.teal:C.orange}}>{Math.abs(s.skew)<0.5?"≈ Normal":s.skew>0?"Right-skewed":"Left-skewed"}</span>
+            <span style={{padding:"2px 8px",borderRadius:4,fontSize:8,fontWeight:700,flexShrink:0,background:Math.abs(s.skew)<0.5?`${C.teal}18`:`${C.orange}18`,color:Math.abs(s.skew)<0.5?C.teal:C.orange}}>{Math.abs(s.skew)<0.5?"≈ Symmetric":s.skew>0?"→ Right-skewed":"← Left-skewed"}</span>
           </div>
           <div style={{background:"#05070f",borderRadius:10,padding:"16px 10px 8px",border:`1px solid ${C.border}`}}>
-            <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={curveData} margin={{top:20,right:20,left:10,bottom:10}}>
-                <defs>
-                  <linearGradient id="bellGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={C.teal} stopOpacity={0.25}/>
-                    <stop offset="100%" stopColor={C.teal} stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="x" type="number" domain={["dataMin","dataMax"]}
-                  ticks={sigmaMarks.map(m=>m.x)}
-                  tickFormatter={(v)=>{
-                    const m=sigmaMarks.find(mm=>Math.abs(mm.x-v)<0.001);
-                    return m?fmtVal(v,vd.fmt):"";
-                  }}
-                  tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}}
-                  axisLine={{stroke:"#2a3350"}} tickLine={false}
-                  height={40}
-                />
-                <YAxis hide domain={[0,maxDens*1.15]}/>
-                <Area type="monotone" dataKey="y" stroke={C.teal} strokeWidth={2.5} fill="url(#bellGrad)" isAnimationActive={false} dot={false}/>
-                {/* Sigma reference lines */}
-                {sigmaMarks.map((m,i)=>(
-                  <ReferenceLine key={i} x={m.x} stroke={m.k===0?"#fff":"#5a6688"} strokeWidth={m.k===0?1.5:1}/>
-                ))}
-              </ComposedChart>
-            </ResponsiveContainer>
-            {/* Sigma labels row (styled like the reference image) */}
-            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,padding:"0 6px"}}>
-              {sigmaMarks.map((m,i)=>(
-                <div key={i} style={{textAlign:"center",flex:1}}>
-                  <div style={{color:m.k===0?"#fff":"#9aa5c4",fontSize:9,fontFamily:C.mono,fontWeight:m.k===0?700:400,whiteSpace:"nowrap"}}>{m.label}</div>
-                  <div style={{color:m.k===0?C.gold:"#7a88b0",fontSize:9,fontFamily:C.mono}}>{fmtVal(m.x,vd.fmt)}</div>
-                </div>
-              ))}
-            </div>
+            {distCurveType==="histogram" ? (
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={curveForHist} margin={{top:20,right:20,left:10,bottom:10}}>
+                  <XAxis dataKey="x" type="number" domain={["dataMin","dataMax"]} tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}} axisLine={{stroke:"#2a3350"}} tickLine={false} tickFormatter={v=>fmtVal(v,vd.fmt)} height={36}/>
+                  <YAxis tick={{fill:"#9aa5c4",fontSize:9,fontFamily:C.mono}} axisLine={false} tickLine={false} width={40}/>
+                  <Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:10}}/>
+                  <Bar data={hist.map(h=>({x:h.bin,count:h.count}))} dataKey="count" fill={vcolor} opacity={0.85} isAnimationActive={animate} animationDuration={animate?1200:0}/>
+                  <Line dataKey="curve" stroke={C.teal} strokeWidth={2.5} dot={false} type="monotone" isAnimationActive={animate} animationDuration={animate?1600:0}/>
+                </ComposedChart>
+              </ResponsiveContainer>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={curveData} margin={{top:20,right:20,left:10,bottom:10}}>
+                  <defs>
+                    <linearGradient id="bellGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={distCurveType==="skew"?C.orange:C.teal} stopOpacity={0.25}/>
+                      <stop offset="100%" stopColor={distCurveType==="skew"?C.orange:C.teal} stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <XAxis dataKey="x" type="number" domain={["dataMin","dataMax"]} ticks={sigmaMarks.map(m=>m.x)} tickFormatter={(v)=>{const m=sigmaMarks.find(mm=>Math.abs(mm.x-v)<0.001);return m?fmtVal(v,vd.fmt):"";}} tick={{fill:"#dde3f5",fontSize:9,fontFamily:C.mono}} axisLine={{stroke:"#2a3350"}} tickLine={false} height={40}/>
+                  <YAxis hide domain={[0,maxDens*1.15]}/>
+                  <Area type="monotone" dataKey="y" stroke={distCurveType==="skew"?C.orange:C.teal} strokeWidth={2.5} fill="url(#bellGrad)" isAnimationActive={animate} animationDuration={animate?1600:0} dot={false}/>
+                  <ReferenceLine x={s.mean} stroke="#fff" strokeWidth={1.5} strokeDasharray="4 3"/>
+                  {distCurveType==="skew"&&<ReferenceLine x={s.median} stroke={C.gold} strokeWidth={1.5} strokeDasharray="4 3" label={{value:"median",fill:C.gold,fontSize:8,position:"top"}}/>}
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
             <div style={{textAlign:"center",marginTop:10,color:"#7a88b0",fontSize:9,fontFamily:C.mono}}>
-              Mean (μ) = {fmtVal(s.mean,vd.fmt)} &nbsp;·&nbsp; Standard Deviation (σ) = {fmtVal(s.std,vd.fmt)}
+              {distCurveType==="skew"
+                ? <>Skew-adjusted curve · mean (white) vs median (gold) shows the {s.skew>0?"right":"left"} shift · skewness = {s.skew.toFixed(3)}</>
+                : distCurveType==="histogram"
+                ? <>Observed histogram with fitted {Math.abs(s.skew)<0.5?"normal":"reference"} curve · μ = {fmtVal(s.mean,vd.fmt)} · σ = {fmtVal(s.std,vd.fmt)}</>
+                : <>Normal (symmetric) curve · μ = {fmtVal(s.mean,vd.fmt)} · σ = {fmtVal(s.std,vd.fmt)}</>}
             </div>
           </div>
         </div>
@@ -3106,7 +3149,7 @@ function Dashboard({user, onLogout}) {
         {ax.g}{ax.x}{ax.y}{ax.t}{ax.l}{ax.refAvg}{ax.refMax}{ax.refMin}
         {allKeys.map((k,i)=>{
           const dn3=k.replace("RAW","(Orig)").substring(0,30);
-          return<Bar key={k} dataKey={k} radius={[4,4,0,0]} name={dn3} opacity={k.includes("RAW")?0.4:1}>
+          return<Bar key={k} dataKey={k} radius={[4,4,0,0]} name={dn3} opacity={k.includes("RAW")?0.4:1} isAnimationActive={animate} animationDuration={animate?1400:0}>
             {multiChartData.map((entry,idx)=><Cell key={idx} fill={i===0?getValueColor(entry[k],allVals):ACCENT[(i+1)%ACCENT.length]}/>)}
           </Bar>;
         })}
@@ -3119,7 +3162,7 @@ function Dashboard({user, onLogout}) {
         {allKeys.map((k,i)=>{
           const isRaw2=k.includes("RAW");
           const dn2=k.replace("RAW","Original").substring(0,30);
-          return<Area key={k} dataKey={k} stroke={isRaw2?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} fill={isRaw2?"transparent":`url(#ag${i})`} strokeWidth={isRaw2?1.5:2.5} strokeDasharray={isRaw2?"5 3":undefined} name={dn2} dot={isRaw2?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={3.5} fill={col} stroke={T.surface} strokeWidth={1.5}/>;}} />;
+          return<Area key={k} dataKey={k} isAnimationActive={animate} animationDuration={animate?1400:0} stroke={isRaw2?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} fill={isRaw2?"transparent":`url(#ag${i})`} strokeWidth={isRaw2?1.5:2.5} strokeDasharray={isRaw2?"5 3":undefined} name={dn2} dot={isRaw2?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={3.5} fill={col} stroke={T.surface} strokeWidth={1.5}/>;}} />;
         })}
       </AreaChart>
     );
@@ -3129,7 +3172,7 @@ function Dashboard({user, onLogout}) {
         {allKeys.map((k,i)=>{
           const isRaw=k.includes("RAW");
           const displayName=k.replace("RAW","Original").substring(0,35);
-          return<Line key={k} dataKey={k} stroke={isRaw?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} strokeWidth={isRaw?1.5:2.5} strokeDasharray={isRaw?"5 3":undefined} name={displayName} dot={isRaw?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={4} fill={col} stroke={T.surface} strokeWidth={2}/>;}} />;
+          return<Line key={k} dataKey={k} isAnimationActive={animate} animationDuration={animate?1400:0} stroke={isRaw?ACCENT[i%ACCENT.length]+"66":ACCENT[i%ACCENT.length]} strokeWidth={isRaw?1.5:2.5} strokeDasharray={isRaw?"5 3":undefined} name={displayName} dot={isRaw?false:(props)=>{const{cx,cy,value}=props;const col=getValueColor(value,allVals);return<circle key={cx+cy} cx={cx} cy={cy} r={4} fill={col} stroke={T.surface} strokeWidth={2}/>;}} />;
         })}
       </LineChart>
     );
@@ -3736,6 +3779,9 @@ function Dashboard({user, onLogout}) {
                     {ic} {t==="dist"?"distribution":t}
                   </button>
                 ))}
+                {(chartType==="area"||chartType==="line"||chartType==="bar")&&(
+                  <button onClick={()=>setAnimate(a=>!a)} style={{...pill(animate,C.gold),fontSize:10}}>{animate?"⏸ Animating":"▶ Animate"}</button>
+                )}
                 {varCodes.length>1&&(
                   <div style={{background:`${C.purple}20`,border:`1px solid ${C.purple}44`,borderRadius:20,padding:"3px 9px",fontSize:9,color:C.purple,fontFamily:C.mono,fontWeight:700}}>
                     {varCodes.length} vars
