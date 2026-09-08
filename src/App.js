@@ -950,13 +950,19 @@ const cacheSet = (key, data) => _dataCache.set(key, {data, ts:Date.now()});
 const cacheClearPrefix = (prefix) => { for(const k of [..._dataCache.keys()]) if(k.startsWith(prefix)) _dataCache.delete(k); };
 const cacheClearAll = () => _dataCache.clear();
 
+// Route external economic-data API calls through our own server (same-origin)
+// to avoid browser CORS failures from third-party providers.
+const proxyFetch = async (targetUrl) => {
+  const r = await fetch(`/api/proxy-data?url=${encodeURIComponent(targetUrl)}`);
+  return r.json();
+};
+
 const fetchWorldBank = async (cc, code, y0, y1) => {
   const ckey = `wb:${cc}:${code}:${y0}:${y1}`;
   const cached = cacheGet(ckey);
   if(cached) return cached;
   try {
-    const r = await fetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&date=${y0}:${y1}&per_page=100`);
-    const j = await r.json();
+    const j = await proxyFetch(`https://api.worldbank.org/v2/country/${cc}/indicator/${code}?format=json&date=${y0}:${y1}&per_page=100`);
     if (!j?.[1]) return [];
     const result = j[1]
       .filter(d => parseInt(d.date) >= y0 && parseInt(d.date) <= y1)
@@ -973,8 +979,7 @@ const fetchIMF = async (cc, code, y0, y1) => {
   if(cached) return cached;
   try {
     const iso3 = ISO3[cc] || cc;
-    const r = await fetch(`https://www.imf.org/external/datamapper/api/v1/${code}/${iso3}`);
-    const j = await r.json();
+    const j = await proxyFetch(`https://www.imf.org/external/datamapper/api/v1/${code}/${iso3}`);
     const data = j?.values?.[code]?.[iso3];
     if (!data) return [];
     const result = Object.entries(data)
@@ -993,8 +998,7 @@ const fetchFRED = async (code, y0, y1, key) => {
   if(cached) return cached;
   try {
     const url = `https://api.stlouisfed.org/fred/series/observations?series_id=${code}&api_key=${key}&file_type=json&observation_start=${y0}-01-01&observation_end=${y1}-12-31&frequency=a&aggregation_method=avg`;
-    const r = await fetch(url);
-    const j = await r.json();
+    const j = await proxyFetch(url);
     if (!j?.observations) return [];
     const result = j.observations
       .filter(o => o.value !== '.' && o.value != null)
@@ -1012,8 +1016,7 @@ const fetchWHO = async (cc, code, y0, y1) => {
   try {
     const iso3 = ISO3[cc] || cc;
     const url = `https://ghoapi.azureedge.net/api/${code}?$filter=SpatialDim eq '${iso3}' and TimeDim ge ${y0} and TimeDim le ${y1}&$select=TimeDim,NumericValue&$orderby=TimeDim`;
-    const r = await fetch(url);
-    const j = await r.json();
+    const j = await proxyFetch(url);
     if (!j?.value) return [];
     const result = j.value
       .filter(d => d.NumericValue != null)

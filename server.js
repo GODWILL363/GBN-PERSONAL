@@ -310,6 +310,42 @@ app.post("/api/insight", (req, res) => {
 // ════════════════════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// DATA PROXY — routes external economic data API calls through the server so
+// the browser never talks cross-origin directly (avoids CORS failures from
+// third-party providers like World Bank, IMF, FRED, WHO).
+// ════════════════════════════════════════════════════════════════════════════
+const PROXY_ALLOWED_HOSTS = new Set([
+  "api.worldbank.org",
+  "www.imf.org",
+  "api.stlouisfed.org",
+  "ghoapi.azureedge.net",
+]);
+
+app.get("/api/proxy-data", (req, res) => {
+  const target = req.query.url;
+  if (!target) return res.status(400).json({ error: "Missing url parameter" });
+  let urlObj;
+  try { urlObj = new URL(target); } catch { return res.status(400).json({ error: "Invalid URL" }); }
+  if (!PROXY_ALLOWED_HOSTS.has(urlObj.hostname)) {
+    return res.status(403).json({ error: `Host not allowed: ${urlObj.hostname}` });
+  }
+  const client = urlObj.protocol === "http:" ? http : https;
+  const proxyReq = client.get(urlObj, (proxyRes) => {
+    let data = "";
+    proxyRes.on("data", c => data += c);
+    proxyRes.on("end", () => {
+      res.setHeader("Content-Type", "application/json");
+      res.status(proxyRes.statusCode || 200).send(data);
+    });
+  });
+  proxyReq.on("error", (e) => {
+    console.error("[proxy-data] error fetching", target, e.message);
+    res.status(502).json({ error: "Upstream fetch failed", detail: e.message });
+  });
+  proxyReq.setTimeout(15000, () => { proxyReq.destroy(new Error("Upstream request timed out")); });
+});
+
 app.get("/api/health", (req, res) => {
   res.json({
     status: "ok", version: "2.0",
