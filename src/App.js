@@ -1397,6 +1397,135 @@ const histogram = (data, bins=12) => {
 };
 
 
+// ══════════════════════════════════════════════
+// ECOSCOPE ANALYTICS ENGINE — owned, offline, no external API
+// Generates automatic quantitative insights from the selected data.
+// ══════════════════════════════════════════════
+
+// Linear trend over a time series (returns slope per period, R², direction)
+const trendAnalysis = (data) => {
+  const pts = data.filter(d=>d.value!=null&&!isNaN(d.value));
+  if(pts.length<3) return null;
+  const xs = pts.map((_,i)=>i);
+  const ys = pts.map(d=>d.value);
+  const reg = olsRegression(xs, ys);
+  if(!reg) return null;
+  const first=ys[0], last=ys[ys.length-1];
+  const totalChangePct = first!==0 ? ((last-first)/Math.abs(first))*100 : 0;
+  const years = pts.length;
+  const cagr = (first>0&&last>0&&years>1) ? (Math.pow(last/first, 1/(years-1))-1)*100 : null;
+  return {
+    slope: reg.b, r2: reg.r2,
+    direction: reg.b>0?"rising":reg.b<0?"falling":"flat",
+    strength: reg.r2>0.8?"strong":reg.r2>0.5?"moderate":reg.r2>0.2?"weak":"no clear",
+    totalChangePct, cagr,
+    firstYear: pts[0].year, lastYear: pts[pts.length-1].year,
+    firstVal: first, lastVal: last,
+  };
+};
+
+// Outlier detection via z-score (|z|>2.5) and IQR method
+const outlierAnalysis = (data) => {
+  const pts = data.filter(d=>d.value!=null&&!isNaN(d.value));
+  const s = summaryStats(pts);
+  if(!s||!s.std) return [];
+  const out=[];
+  pts.forEach(d=>{
+    const z=(d.value-s.mean)/s.std;
+    if(Math.abs(z)>2.5) out.push({year:d.year, value:d.value, z, type:z>0?"high":"low"});
+  });
+  return out;
+};
+
+// Year-over-year volatility (std of % changes)
+const volatilityAnalysis = (data) => {
+  const pts = data.filter(d=>d.value!=null&&!isNaN(d.value));
+  if(pts.length<3) return null;
+  const changes=[];
+  for(let i=1;i<pts.length;i++){
+    if(pts[i-1].value) changes.push((pts[i].value-pts[i-1].value)/Math.abs(pts[i-1].value)*100);
+  }
+  if(!changes.length) return null;
+  const s=summaryStats(changes.map(v=>({value:v})));
+  return {avgChange:s.mean, volatility:s.std, maxJump:Math.max(...changes), maxDrop:Math.min(...changes)};
+};
+
+// Structural break detection (largest change in trend slope, simple CUSUM-like)
+const breakAnalysis = (data) => {
+  const pts=data.filter(d=>d.value!=null&&!isNaN(d.value));
+  if(pts.length<8) return null;
+  let bestYear=null, bestDiff=0;
+  for(let k=3;k<pts.length-3;k++){
+    const left=pts.slice(0,k), right=pts.slice(k);
+    const lr=olsRegression(left.map((_,i)=>i), left.map(d=>d.value));
+    const rr=olsRegression(right.map((_,i)=>i), right.map(d=>d.value));
+    if(lr&&rr){
+      const diff=Math.abs(rr.b-lr.b);
+      if(diff>bestDiff){bestDiff=diff;bestYear=pts[k].year;}
+    }
+  }
+  return bestYear?{year:bestYear,slopeChange:bestDiff}:null;
+};
+
+// Correlation between two aligned series
+const correlationAnalysis = (dataA, dataB) => {
+  const mapB={}; dataB.forEach(d=>{if(d.value!=null)mapB[d.year]=d.value;});
+  const pairs=dataA.filter(d=>d.value!=null&&mapB[d.year]!=null).map(d=>[d.value,mapB[d.year]]);
+  if(pairs.length<3) return null;
+  const xs=pairs.map(p=>p[0]), ys=pairs.map(p=>p[1]);
+  const r=_pearson(xs,ys);
+  return {r, n:pairs.length,
+    strength:Math.abs(r)>0.7?"strong":Math.abs(r)>0.4?"moderate":Math.abs(r)>0.2?"weak":"negligible",
+    direction:r>0?"positive":"negative"};
+};
+
+// MAIN: generate a full written analysis for a set of variables
+const generateEcoScopeAnalysis = (varSeriesList, countryName) => {
+  // varSeriesList: [{name, fmt, data:[{year,value}]}]
+  const sections=[];
+  varSeriesList.forEach(v=>{
+    const s=summaryStats(v.data);
+    if(!s){ sections.push({name:v.name, lines:["Insufficient data to analyze."]}); return; }
+    const trend=trendAnalysis(v.data);
+    const outliers=outlierAnalysis(v.data);
+    const vol=volatilityAnalysis(v.data);
+    const brk=breakAnalysis(v.data);
+    const lines=[];
+    // Trend
+    if(trend){
+      const cagrTxt = trend.cagr!=null ? ` (CAGR ${trend.cagr>=0?"+":""}${trend.cagr.toFixed(2)}%/yr)` : "";
+      lines.push(`${trend.strength.charAt(0).toUpperCase()+trend.strength.slice(1)} ${trend.direction} trend from ${trend.firstYear} to ${trend.lastYear}: ${fmtVal(trend.firstVal,v.fmt)} → ${fmtVal(trend.lastVal,v.fmt)}, a ${trend.totalChangePct>=0?"+":""}${trend.totalChangePct.toFixed(1)}% total change${cagrTxt}. (R²=${trend.r2.toFixed(2)})`);
+    }
+    // Distribution shape
+    const shape = Math.abs(s.skew)<0.5?"approximately symmetric":s.skew>0?"right-skewed (mean above median)":"left-skewed (mean below median)";
+    lines.push(`Distribution is ${shape}; mean ${fmtVal(s.mean,v.fmt)}, median ${fmtVal(s.median,v.fmt)}, σ ${fmtVal(s.std,v.fmt)} (CV ${s.cv.toFixed(1)}%).`);
+    // Volatility
+    if(vol){
+      lines.push(`Average year-on-year change ${vol.avgChange>=0?"+":""}${vol.avgChange.toFixed(1)}% with ${vol.volatility.toFixed(1)}% volatility; sharpest rise +${vol.maxJump.toFixed(1)}%, steepest fall ${vol.maxDrop.toFixed(1)}%.`);
+    }
+    // Outliers
+    if(outliers.length){
+      lines.push(`${outliers.length} outlier${outliers.length>1?"s":""} detected: ${outliers.slice(0,4).map(o=>`${o.year} (${o.type}, z=${o.z.toFixed(1)})`).join(", ")}${outliers.length>4?"…":""}.`);
+    }
+    // Structural break
+    if(brk){
+      lines.push(`Possible structural break around ${brk.year} — the trend slope shifts notably there.`);
+    }
+    sections.push({name:v.name, lines});
+  });
+  // Cross-variable correlations
+  const correlations=[];
+  for(let i=0;i<varSeriesList.length;i++){
+    for(let j=i+1;j<varSeriesList.length;j++){
+      const c=correlationAnalysis(varSeriesList[i].data, varSeriesList[j].data);
+      if(c&&Math.abs(c.r)>0.2){
+        correlations.push(`${varSeriesList[i].name.substring(0,22)} & ${varSeriesList[j].name.substring(0,22)}: ${c.strength} ${c.direction} correlation (r=${c.r.toFixed(2)}, n=${c.n}).`);
+      }
+    }
+  }
+  return {sections, correlations, country:countryName};
+};
+
 // ── DAG (Directed Acyclic Graph) Causal Analysis ─────────────────────────────
 // Detect cycles in a DAG using DFS
 const dagHasCycle = (nodes, edges) => {
@@ -2482,6 +2611,7 @@ function Dashboard({user, onLogout}) {
   const [distVar,setDistVar]=useState(0);
   const [animate,setAnimate]=useState(false);
   const [animTick,setAnimTick]=useState(0);
+  const [engineAnalysis,setEngineAnalysis]=useState(null);
   const [distCurveType,setDistCurveType]=useState("normal"); // normal | skew | histogram
   const [viewMode,setViewMode]=useState("chart");
 
@@ -2649,6 +2779,17 @@ function Dashboard({user, onLogout}) {
     setNoDataVars(new Set());
     loadData();
   },[varBasket,effCountry,cmpOn,cmpCountry,loadData]);
+
+  // Build series list for the built-in analytics engine (respects transforms/impute)
+  const allVarDefsForEngine = () => {
+    return varBasket.map(item=>{
+      const s2 = ALL_SRCS_MAP[item.sourceId];
+      const vd = item.sourceId==="__imported__" ? {name:item.label,fmt:"num"} : (s2?.vars.find(v=>v.code===item.varCode));
+      const dk = `${item.sourceId}:${item.varCode}`;
+      const data = applyTransform(imputeData(multiData[dk]||[],appliedImpute),appliedTransform);
+      return vd && data.length ? {name:item.label||vd.name, fmt:vd.fmt||"num", data} : null;
+    }).filter(Boolean);
+  };
 
   // Reprocess (transform/impute) purely client-side — NO network calls, instant on Apply
   useEffect(()=>{
@@ -4164,18 +4305,71 @@ function Dashboard({user, onLogout}) {
             </div>
           )}
 
+          {/* ECOSCOPE AI — owned statistical engine (free, offline) */}
+          <div style={{...card,background:T.card,border:`1px solid ${C.teal}44`}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <div style={{width:22,height:22,background:`linear-gradient(135deg,${C.teal},${C.blue})`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12}}>⬡</div>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>EcoScope AI</h3>
+                  <span style={{fontSize:7,color:C.teal,background:`${C.teal}18`,borderRadius:4,padding:"2px 6px",fontFamily:C.mono,fontWeight:700}}>BUILT-IN</span>
+                </div>
+                <p style={{margin:0,fontSize:10,color:C.mid,fontFamily:C.mono}}>Automatic quantitative analysis · trends, outliers, volatility, correlations · {cc.flag} {cc.name}</p>
+              </div>
+              <button onClick={()=>{
+                const list=allVarDefsForEngine();
+                if(!list.length){setEngineAnalysis({error:"No data loaded to analyze."});return;}
+                setEngineAnalysis(generateEcoScopeAnalysis(list, cc.name));
+              }} disabled={!data.length} style={{...btn(C.teal),color:"#000",opacity:!data.length?.5:1,cursor:!data.length?"not-allowed":"pointer",fontSize:11,padding:"9px 18px"}}>
+                ⬡ Analyze Data
+              </button>
+            </div>
+            {engineAnalysis&&engineAnalysis.error&&(
+              <div style={{background:`${C.red}12`,border:`1px solid ${C.red}44`,borderRadius:8,padding:"12px 14px",marginTop:14}}>
+                <p style={{color:C.red,fontSize:11,fontFamily:C.mono,margin:0}}>{engineAnalysis.error}</p>
+              </div>
+            )}
+            {engineAnalysis&&!engineAnalysis.error&&(
+              <div style={{marginTop:14,display:"flex",flexDirection:"column",gap:12}}>
+                {engineAnalysis.sections.map((sec,i)=>(
+                  <div key={i} style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"12px 16px"}}>
+                    <div style={{color:ACCENT[i%ACCENT.length],fontSize:11,fontFamily:C.mono,fontWeight:700,marginBottom:8}}>● {sec.name}</div>
+                    <ul style={{margin:0,paddingLeft:16,display:"flex",flexDirection:"column",gap:6}}>
+                      {sec.lines.map((ln,j)=><li key={j} style={{color:C.text,fontSize:11.5,lineHeight:1.6,fontFamily:C.mono}}>{ln}</li>)}
+                    </ul>
+                  </div>
+                ))}
+                {engineAnalysis.correlations.length>0&&(
+                  <div style={{background:`${C.purple}0e`,border:`1px solid ${C.purple}33`,borderRadius:9,padding:"12px 16px"}}>
+                    <div style={{color:C.purple,fontSize:11,fontFamily:C.mono,fontWeight:700,marginBottom:8}}>⟷ Cross-Variable Correlations</div>
+                    <ul style={{margin:0,paddingLeft:16,display:"flex",flexDirection:"column",gap:6}}>
+                      {engineAnalysis.correlations.map((c,j)=><li key={j} style={{color:C.text,fontSize:11.5,lineHeight:1.6,fontFamily:C.mono}}>{c}</li>)}
+                    </ul>
+                  </div>
+                )}
+                <div style={{color:C.dim,fontSize:8,fontFamily:C.mono,textAlign:"right"}}>Generated by EcoScope's built-in analytics engine — no external service, computed on your data.</div>
+              </div>
+            )}
+            {!engineAnalysis&&(
+              <p style={{color:C.dim,fontSize:11,fontFamily:C.mono,marginTop:12,marginBottom:0}}>
+                Click "Analyze Data" for instant automatic analysis — trends, growth rates, outliers, volatility, distribution shape and correlations. Free, built-in, works on any loaded data.
+              </p>
+            )}
+          </div>
+
           {/* AI INSIGHT */}
           <div style={{...card,background:T.card,border:`1px solid ${T.border}`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                   <div style={{width:22,height:22,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>◈</div>
-                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>AI Economic Insight</h3>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>EcoScope AI — Deep Analysis</h3>
+                  <span style={{fontSize:7,color:C.gold,background:`${C.gold}18`,borderRadius:4,padding:"2px 6px",fontFamily:C.mono,fontWeight:700}}>OPTIONAL · PRO</span>
                 </div>
-                <p style={{margin:0,fontSize:10,color:C.mid,fontFamily:C.mono}}>Powered by Claude · {source.short} · {cc.flag} {cc.name} · {currentVar.name.substring(0,40)}</p>
+                <p style={{margin:0,fontSize:10,color:C.mid,fontFamily:C.mono}}>Optional narrative AI analysis · {cc.flag} {cc.name} · {currentVar.name.substring(0,36)}</p>
               </div>
               <button onClick={()=>{if(!plan.aiInsights){setUpgradeModal({feature:"AI Economic Insights",requiredPlan:"pro"});return;}getInsight();}} disabled={aiLoading||!data.length} style={{...btn(plan.aiInsights?C.gold:C.dim),opacity:aiLoading||!data.length?.5:1,cursor:aiLoading||!data.length?"not-allowed":"pointer",fontSize:11,padding:"9px 18px",position:"relative"}}>
-                {aiLoading?"◌ Analysing…":"✦ Generate Insight"}
+                {aiLoading?"◌ Analysing…":"✦ Deep Analysis"}
                 {!plan.aiInsights&&<span style={{position:"absolute",top:-6,right:-6,background:C.gold,color:"#000",fontSize:7,fontWeight:800,borderRadius:4,padding:"2px 4px",fontFamily:C.mono}}>PRO</span>}
               </button>
             </div>
@@ -4192,7 +4386,7 @@ function Dashboard({user, onLogout}) {
             )}
             {!insight&&!aiLoading&&!aiError&&(
               <p style={{color:C.dim,fontSize:11,fontFamily:C.mono,marginTop:12,marginBottom:0}}>
-                Click "Generate Insight" for an AI-powered analysis of the selected data. Contact your administrator to enable AI insights.
+                Optional narrative analysis powered by an external AI model, written in prose. The built-in EcoScope AI above already gives you full quantitative analysis for free.
               </p>
             )}
           </div>
