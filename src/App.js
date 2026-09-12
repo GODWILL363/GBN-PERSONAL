@@ -156,19 +156,31 @@ const C = {
   teal:"#00c9a7", red:"#ff4c6a", blue:"#4f8cff",
   purple:"#b05cff", orange:"#ff8c42", cyan:"#00d4e8",
   text:"#dde3f5", mid:"#7a88b0", dim:"#3a4565",
-  font:"'Syne',sans-serif", mono:"'IBM Plex Mono',monospace",
+  font:"'Space Grotesk','Syne',system-ui,sans-serif", display:"'Syne',sans-serif", mono:"'JetBrains Mono','IBM Plex Mono',monospace",
 };
 const ACCENT=["#f0a500","#00c9a7","#4f8cff","#b05cff","#ff4c6a","#ff8c42","#00d4e8","#7ed957","#ff5cf0","#ffd93d","#5c7cff","#ff8fa3","#4dd0e1","#c77dff"];
 
 // ══════════════════════════════════════════════
 // THEMES
 // ══════════════════════════════════════════════
+// Glass themes — bg is the deep base; surface/card use rgba translucency for frosted-glass panels.
+// glow1/glow2 are ambient background orbs that give the water-like depth.
 const THEMES = {
-  dark:   {bg:"#05070f",surface:"#0b0e1c",card:"#0f1221",border:"#182038",borderHi:"#243060",text:"#dde3f5",mid:"#7a88b0",dim:"#3a4565",label:"Dark Terminal"},
-  light:  {bg:"#f0f4ff",surface:"#ffffff",card:"#f8faff",border:"#dde3f5",borderHi:"#b0c4f0",text:"#0f1221",mid:"#4a5580",dim:"#8090b0",label:"Light Mode"},
-  ocean:  {bg:"#020d1a",surface:"#051525",card:"#071e33",border:"#0a2d4a",borderHi:"#0e3d66",text:"#d0eaff",mid:"#5590b0",dim:"#2a4a60",label:"Ocean Deep"},
-  forest: {bg:"#050f08",surface:"#0a1a0d",card:"#0f2415",border:"#1a3a20",borderHi:"#255030",text:"#d5f0dc",mid:"#55906a",dim:"#2a4a35",label:"Forest Night"},
-  amber:  {bg:"#0f0800",surface:"#1a1000",card:"#241800",border:"#3a2a00",borderHi:"#503a00",text:"#fff0d0",mid:"#c09040",dim:"#604820",label:"Amber Glow"},
+  dark:   {bg:"#070a16",bgGrad:"radial-gradient(1200px 700px at 15% -5%, #14204a55, transparent), radial-gradient(1000px 600px at 100% 0%, #3a1a6633, transparent), #070a16",
+           surface:"rgba(20,26,48,0.55)",card:"rgba(24,31,58,0.45)",border:"rgba(120,140,200,0.14)",borderHi:"rgba(140,160,230,0.35)",
+           text:"#eef2ff",mid:"#9aa8d0",dim:"#5a668c",glow1:"#4f8cff",glow2:"#b05cff",label:"Midnight Glass"},
+  light:  {bg:"#eef2fb",bgGrad:"radial-gradient(1200px 700px at 10% -5%, #c9d8ff88, transparent), radial-gradient(1000px 600px at 100% 0%, #e6d4ff77, transparent), #eef2fb",
+           surface:"rgba(255,255,255,0.62)",card:"rgba(255,255,255,0.5)",border:"rgba(60,80,140,0.14)",borderHi:"rgba(80,110,200,0.35)",
+           text:"#141a30",mid:"#4a5680",dim:"#8a97bd",glow1:"#7aa0ff",glow2:"#c9a0ff",label:"Frost Light"},
+  ocean:  {bg:"#041420",bgGrad:"radial-gradient(1200px 700px at 15% -5%, #0a4a6a55, transparent), radial-gradient(1000px 600px at 100% 0%, #0e6a8833, transparent), #041420",
+           surface:"rgba(8,34,52,0.55)",card:"rgba(10,42,64,0.45)",border:"rgba(80,180,220,0.14)",borderHi:"rgba(100,200,240,0.35)",
+           text:"#e0f4ff",mid:"#78b8d8",dim:"#3a6a86",glow1:"#00d4e8",glow2:"#4f8cff",label:"Ocean Glass"},
+  forest: {bg:"#07130c",bgGrad:"radial-gradient(1200px 700px at 15% -5%, #14502a55, transparent), radial-gradient(1000px 600px at 100% 0%, #2a6a3a33, transparent), #07130c",
+           surface:"rgba(14,38,22,0.55)",card:"rgba(16,46,26,0.45)",border:"rgba(120,200,140,0.14)",borderHi:"rgba(140,220,160,0.35)",
+           text:"#e6f6ea",mid:"#7ac09a",dim:"#3a6a4a",glow1:"#00c9a7",glow2:"#7ed957",label:"Forest Glass"},
+  amber:  {bg:"#140d02",bgGrad:"radial-gradient(1200px 700px at 15% -5%, #6a4a0a55, transparent), radial-gradient(1000px 600px at 100% 0%, #884a1a33, transparent), #140d02",
+           surface:"rgba(42,30,8,0.55)",card:"rgba(52,36,10,0.45)",border:"rgba(230,180,80,0.14)",borderHi:"rgba(250,200,100,0.35)",
+           text:"#fff2dc",mid:"#d0a860",dim:"#7a5c2a",glow1:"#f0a500",glow2:"#ff8c42",label:"Amber Glass"},
 };
 
 // ══════════════════════════════════════════════
@@ -1920,11 +1932,11 @@ const csvToSeries = (headers, rows, timeCol) => {
 // STYLES
 // ══════════════════════════════════════════════
 
-const inp = {background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 12px",color:C.text,fontSize:12,fontFamily:C.mono,outline:"none",boxSizing:"border-box",width:"100%"};
+const inp = {background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:11,padding:"10px 13px",color:C.text,fontSize:12,fontFamily:C.mono,outline:"none",boxSizing:"border-box",width:"100%",backdropFilter:"blur(8px)",WebkitBackdropFilter:"blur(8px)",transition:"border-color .15s ease, box-shadow .15s ease"};
 const sel = {...inp, cursor:"pointer"};
-const pill = (active, col=C.gold) => ({padding:"4px 11px",borderRadius:20,border:"1px solid",borderColor:active?col:C.border,background:active?`${col}1a`:"transparent",color:active?col:C.mid,fontSize:10,cursor:"pointer",fontFamily:C.mono,transition:"all .15s",whiteSpace:"nowrap"});
-const btn = (col=C.gold) => ({background:col,color:col===C.gold?"#000":"#fff",border:"none",borderRadius:8,padding:"10px 20px",fontSize:12,fontWeight:700,fontFamily:C.font,cursor:"pointer",letterSpacing:"0.04em"});
-const card = {background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 22px"};
+const pill = (active, col=C.gold) => ({padding:"5px 12px",borderRadius:20,border:"1px solid",borderColor:active?col:C.border,background:active?`${col}22`:"rgba(255,255,255,0.03)",color:active?col:C.mid,fontSize:10,cursor:"pointer",fontFamily:C.mono,backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",boxShadow:active?`0 2px 12px ${col}33`:"none",transition:"all .15s",whiteSpace:"nowrap"});
+const btn = (col=C.gold) => ({background:col,color:col===C.gold?"#0a0a0a":"#fff",border:"none",borderRadius:11,padding:"10px 20px",fontSize:12,fontWeight:700,fontFamily:C.font,cursor:"pointer",letterSpacing:"0.04em",boxShadow:`0 4px 18px ${col}44, inset 0 1px 0 rgba(255,255,255,0.25)`,transition:"transform .12s ease, box-shadow .12s ease"});
+const card = {background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"18px 22px",backdropFilter:"blur(16px) saturate(1.4)",WebkitBackdropFilter:"blur(16px) saturate(1.4)",boxShadow:"0 8px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06)"};
 
 // ══════════════════════════════════════════════
 // LOGIN
@@ -1993,7 +2005,7 @@ function Login({onLogin}){
   };
 
   return(
-    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:C.font,position:"relative",overflow:"hidden"}}>
+    <div style={{background:THEMES.dark.bgGrad,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:C.font,position:"relative",overflow:"hidden"}}>
       <div style={{position:"absolute",inset:0,backgroundImage:`linear-gradient(${C.border}44 1px,transparent 1px),linear-gradient(90deg,${C.border}44 1px,transparent 1px)`,backgroundSize:"48px 48px",pointerEvents:"none"}}/>
       <div style={{position:"absolute",width:700,height:700,borderRadius:"50%",background:`radial-gradient(circle,${C.gold}0d 0%,transparent 70%)`,top:"50%",left:"50%",transform:"translate(-50%,-50%)",pointerEvents:"none"}}/>
       <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:22,padding:"40px 44px 32px",width:440,position:"relative",boxShadow:`0 32px 80px rgba(0,0,0,.6)`}}>
@@ -3350,7 +3362,7 @@ function Dashboard({user, onLogout}) {
   };
 
   return (
-    <div style={{background:T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
+    <div style={{background:T.bgGrad||T.bg,minHeight:"100vh",fontFamily:C.font,color:T.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
 
       {/* HEADER */}
       <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:10}}>
@@ -3416,6 +3428,8 @@ function Dashboard({user, onLogout}) {
         {/* SIDEBAR - hidden overlay on mobile, fixed panel on desktop */}
         <aside id="scroll-sidebar" style={{
           background:T.surface,
+          backdropFilter:"blur(20px) saturate(1.5)",
+          WebkitBackdropFilter:"blur(20px) saturate(1.5)",
           borderRight:`1px solid ${T.border}`,
           display:"flex",
           flexDirection:"column",
@@ -4799,7 +4813,7 @@ function AdminPanel({user, onLogout}) {
   };
 
   return (
-    <div style={{background:C.bg,minHeight:"100vh",fontFamily:C.font,color:C.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
+    <div style={{background:THEMES.dark.bgGrad,minHeight:"100vh",fontFamily:C.font,color:C.text,display:"flex",flexDirection:"column",height:"100vh",overflow:"hidden"}}>
 
       {/* NOTIFICATION */}
       {notif&&(
@@ -4809,7 +4823,7 @@ function AdminPanel({user, onLogout}) {
       )}
 
       {/* HEADER */}
-      <header style={{background:C.surface,borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:20,gap:8}}>
+      <header style={{background:"rgba(20,26,48,0.55)",backdropFilter:"blur(20px) saturate(1.5)",WebkitBackdropFilter:"blur(20px) saturate(1.5)",borderBottom:`1px solid ${C.border}`,padding:isMobile?"10px 12px":"10px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,zIndex:20,gap:8}}>
         <div style={{display:"flex",alignItems:"center",gap:isMobile?8:12}}>
           {isMobile&&<button onClick={()=>setSidebarOpen(o=>!o)} style={{background:C.gold,border:"none",cursor:"pointer",padding:9,borderRadius:7,display:"flex",flexDirection:"column",gap:4,flexShrink:0}}><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/><span style={{display:"block",width:18,height:2,background:"#000",borderRadius:2}}/></button>}
           <div style={{width:32,height:32,background:`linear-gradient(135deg,${C.gold},${C.goldLt})`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15}}>◈</div>
@@ -4872,7 +4886,7 @@ function AdminPanel({user, onLogout}) {
         {sidebarOpen&&isMobile&&<div onClick={()=>setSidebarOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",zIndex:98}}/>}
 
         {/* ADMIN SIDEBAR NAV */}
-        <nav id="scroll-adminnav" style={{background:C.surface,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
+        <nav id="scroll-adminnav" style={{background:"rgba(20,26,48,0.55)",backdropFilter:"blur(20px) saturate(1.5)",WebkitBackdropFilter:"blur(20px) saturate(1.5)",borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",padding:"12px 8px",...(isMobile?{position:"fixed",top:0,left:0,bottom:0,width:"80vw",maxWidth:280,zIndex:99,transform:sidebarOpen?"translateX(0)":"translateX(-105%)",transition:"transform 0.3s ease",boxShadow:sidebarOpen?"8px 0 40px rgba(0,0,0,0.7)":"none",overflowY:"auto"}:{width:200,flexShrink:0})}}>
           {isMobile&&<div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}><button onClick={()=>setSidebarOpen(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"5px 12px",fontSize:12,fontFamily:C.mono}}>✕ Close</button></div>}
           {navItems.map(n=>(
             <button key={n.id} onClick={()=>{setTab(n.id);if(isMobile) setSidebarOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderRadius:9,border:"none",background:tab===n.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===n.id?C.gold:"transparent"}`,marginBottom:2,transition:"all .12s",width:"100%"}}>
@@ -5299,9 +5313,15 @@ function AdminPanel({user, onLogout}) {
         }
       `}</style>
       <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
         html,body{height:100%;width:100%;overflow:hidden;position:fixed;top:0;left:0;right:0;bottom:0;}
         #root{height:100%;width:100%;overflow:hidden;}
+        body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;}
+        h1,h2,h3{font-family:'Syne',sans-serif;letter-spacing:-0.01em;}
+        button{transition:transform .12s ease, box-shadow .12s ease, background .15s ease;}
+        button:active{transform:scale(0.97);}
+        input:focus,select:focus,textarea:focus{border-color:${T.borderHi}!important;box-shadow:0 0 0 3px ${T.glow1||"#4f8cff"}22!important;}
         @media(max-width:768px){
           table{font-size:10px!important;}
         }::-webkit-scrollbar{width:12px;height:12px;}::-webkit-scrollbar-track{background:${C.bg};border-radius:8px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:8px;border:2px solid ${C.bg};background-clip:padding-box;}::-webkit-scrollbar-thumb:hover{background:${C.gold}aa;}#scroll-adminnav::-webkit-scrollbar-thumb{background:${C.gold}aa;border:2px solid ${C.surface};background-clip:padding-box;}#scroll-adminnav::-webkit-scrollbar-thumb:hover{background:${C.gold};}#scroll-adminmain::-webkit-scrollbar-thumb{background:${C.teal}aa;border:2px solid ${C.bg};background-clip:padding-box;}#scroll-adminmain::-webkit-scrollbar-thumb:hover{background:${C.teal};}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
