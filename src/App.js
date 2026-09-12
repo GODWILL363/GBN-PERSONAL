@@ -1936,7 +1936,7 @@ const inp = {background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,
 const sel = {...inp, cursor:"pointer"};
 const pill = (active, col=C.gold) => ({padding:"5px 12px",borderRadius:20,border:"1px solid",borderColor:active?col:C.border,background:active?`${col}22`:"rgba(255,255,255,0.03)",color:active?col:C.mid,fontSize:10,cursor:"pointer",fontFamily:C.mono,backdropFilter:"blur(6px)",WebkitBackdropFilter:"blur(6px)",boxShadow:active?`0 2px 12px ${col}33`:"none",transition:"all .15s",whiteSpace:"nowrap"});
 const btn = (col=C.gold) => ({background:col,color:col===C.gold?"#0a0a0a":"#fff",border:"none",borderRadius:11,padding:"10px 20px",fontSize:12,fontWeight:700,fontFamily:C.font,cursor:"pointer",letterSpacing:"0.04em",boxShadow:`0 4px 18px ${col}44, inset 0 1px 0 rgba(255,255,255,0.25)`,transition:"transform .12s ease, box-shadow .12s ease"});
-const card = {background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"18px 22px",backdropFilter:"blur(16px) saturate(1.4)",WebkitBackdropFilter:"blur(16px) saturate(1.4)",boxShadow:"0 8px 32px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.06)"};
+const card = {background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:"18px 22px",backdropFilter:"blur(20px) saturate(1.6)",WebkitBackdropFilter:"blur(20px) saturate(1.6)",boxShadow:"0 8px 40px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.10), inset 0 0 0 1px rgba(255,255,255,0.02)",position:"relative"};
 
 // ══════════════════════════════════════════════
 // LOGIN
@@ -3909,7 +3909,7 @@ function Dashboard({user, onLogout}) {
           {/* KPI Cards */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11}}>
             {kpis.map((k,i)=>(
-              <div key={i} style={{...card,padding:"13px 16px"}}>
+              <div key={i} className="glass-card" style={{...card,padding:"13px 16px"}}>
                 <div style={{fontSize:9,color:C.dim,fontFamily:C.mono,textTransform:"uppercase",letterSpacing:"0.1em",marginBottom:7}}>{k.lbl}</div>
                 <div style={{fontSize:16,fontWeight:700,color:k.pos?C.teal:k.neg?C.red:C.text,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={k.val}>{k.val}</div>
                 <div style={{fontSize:9,color:C.mid,fontFamily:C.mono}}>{k.sub}</div>
@@ -3929,7 +3929,7 @@ function Dashboard({user, onLogout}) {
           )}
 
           {/* Chart */}
-          <div style={{...card,padding:"20px 22px",background:T.card,border:`1px solid ${T.border}`}}>
+          <div className="glass-card" style={{...card,padding:"20px 22px",background:T.card,border:`1px solid ${T.border}`}}>
             <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
               <div>
                 <h2 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>{currentVar.name}</h2>
@@ -4126,7 +4126,7 @@ function Dashboard({user, onLogout}) {
               return {x:p.x, y:p.y};
             };
             return(
-              <div style={{...card,background:T.card,border:`1px solid ${C.purple}44`}}>
+              <div className="glass-card" style={{...card,background:T.card,border:`1px solid ${C.purple}44`}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
                   <div style={{width:22,height:22,background:`linear-gradient(135deg,${C.purple},${C.blue})`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11}}>⚸</div>
                   <h3 style={{margin:0,fontSize:14,fontWeight:700,color:C.text}}>Causal DAG Analysis</h3>
@@ -4320,7 +4320,7 @@ function Dashboard({user, onLogout}) {
           )}
 
           {/* ECOSCOPE AI — owned statistical engine (free, offline) */}
-          <div style={{...card,background:T.card,border:`1px solid ${C.teal}44`}}>
+          <div className="glass-card" style={{...card,background:T.card,border:`1px solid ${C.teal}44`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
@@ -4349,7 +4349,7 @@ function Dashboard({user, onLogout}) {
                   <div key={i} style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"12px 16px"}}>
                     <div style={{color:ACCENT[i%ACCENT.length],fontSize:11,fontFamily:C.mono,fontWeight:700,marginBottom:8}}>● {sec.name}</div>
                     <ul style={{margin:0,paddingLeft:16,display:"flex",flexDirection:"column",gap:6}}>
-                      {sec.lines.map((ln,j)=><li key={j} style={{color:C.text,fontSize:11.5,lineHeight:1.6,fontFamily:C.mono}}>{ln}</li>)}
+                      {sec.lines.map((ln,j)=><li key={j} className="mono-relax" style={{color:C.text,fontSize:11.5,fontFamily:C.mono}}>{ln}</li>)}
                     </ul>
                   </div>
                 ))}
@@ -4357,7 +4357,7 @@ function Dashboard({user, onLogout}) {
                   <div style={{background:`${C.purple}0e`,border:`1px solid ${C.purple}33`,borderRadius:9,padding:"12px 16px"}}>
                     <div style={{color:C.purple,fontSize:11,fontFamily:C.mono,fontWeight:700,marginBottom:8}}>⟷ Cross-Variable Correlations</div>
                     <ul style={{margin:0,paddingLeft:16,display:"flex",flexDirection:"column",gap:6}}>
-                      {engineAnalysis.correlations.map((c,j)=><li key={j} style={{color:C.text,fontSize:11.5,lineHeight:1.6,fontFamily:C.mono}}>{c}</li>)}
+                      {engineAnalysis.correlations.map((c,j)=><li key={j} className="mono-relax" style={{color:C.text,fontSize:11.5,fontFamily:C.mono}}>{c}</li>)}
                     </ul>
                   </div>
                 )}
@@ -4372,7 +4372,7 @@ function Dashboard({user, onLogout}) {
           </div>
 
           {/* AI INSIGHT */}
-          <div style={{...card,background:T.card,border:`1px solid ${T.border}`}}>
+          <div className="glass-card" style={{...card,background:T.card,border:`1px solid ${T.border}`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
               <div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
@@ -4395,7 +4395,7 @@ function Dashboard({user, onLogout}) {
             {insight&&(
               <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:9,padding:"14px 16px",marginTop:14}}>
                 <div style={{color:C.mid,fontSize:9,fontFamily:C.mono,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8}}>Analysis — {source.name} · {cc.name} · {currentVar.name}</div>
-                <p style={{color:C.text,fontSize:12.5,lineHeight:1.85,margin:0,fontFamily:C.mono,whiteSpace:"pre-wrap"}}>{insight}</p>
+                <p className="mono-relax" style={{color:C.text,fontSize:12.5,lineHeight:1.85,margin:0,fontFamily:C.mono,whiteSpace:"pre-wrap"}}>{insight}</p>
               </div>
             )}
             {!insight&&!aiLoading&&!aiError&&(
@@ -5322,6 +5322,14 @@ function AdminPanel({user, onLogout}) {
         button{transition:transform .12s ease, box-shadow .12s ease, background .15s ease;}
         button:active{transform:scale(0.97);}
         input:focus,select:focus,textarea:focus{border-color:${T.borderHi}!important;box-shadow:0 0 0 3px ${T.glow1||"#4f8cff"}22!important;}
+        /* Glass panels: subtle hover lift + top-edge light sheen */
+        .glass-card{transition:transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s ease, border-color .2s ease;}
+        .glass-card:hover{transform:translateY(-2px);box-shadow:0 14px 48px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.14)!important;border-color:${T.borderHi}!important;}
+        .glass-card::before{content:"";position:absolute;top:0;left:14px;right:14px;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.18),transparent);border-radius:16px;pointer-events:none;}
+        /* Mono text breathing room */
+        .mono-relax{letter-spacing:0.02em;line-height:1.7;}
+        /* Smooth scrolling */
+        *{scroll-behavior:smooth;}
         @media(max-width:768px){
           table{font-size:10px!important;}
         }::-webkit-scrollbar{width:12px;height:12px;}::-webkit-scrollbar-track{background:${C.bg};border-radius:8px;}::-webkit-scrollbar-thumb{background:${C.border};border-radius:8px;border:2px solid ${C.bg};background-clip:padding-box;}::-webkit-scrollbar-thumb:hover{background:${C.gold}aa;}#scroll-adminnav::-webkit-scrollbar-thumb{background:${C.gold}aa;border:2px solid ${C.surface};background-clip:padding-box;}#scroll-adminnav::-webkit-scrollbar-thumb:hover{background:${C.gold};}#scroll-adminmain::-webkit-scrollbar-thumb{background:${C.teal}aa;border:2px solid ${C.bg};background-clip:padding-box;}#scroll-adminmain::-webkit-scrollbar-thumb:hover{background:${C.teal};}select option{background:${C.card};color:${C.text};}@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}a{text-decoration:none;}`}</style>
