@@ -122,6 +122,22 @@ const US = {
     return {req: res};
   },
 
+  // Password change: the server verifies the current password before saving the new one
+  async changePassword(username, currentPassword, newPassword){
+    const res = await this._call('POST', '/api/auth/change-password', {username, currentPassword, newPassword});
+    if(res.error) return {error: res.error};
+    this.log(username, 'Password changed', 'User changed their password');
+    return {ok:true};
+  },
+
+  // Support chat
+  async supportMessages(username){ return this._call('GET', `/api/support/messages?username=${encodeURIComponent(username)}`); },
+  async supportSend(msg){ return this._call('POST', '/api/support/messages', msg); },
+  async supportThreads(){ return this._call('GET', '/api/support/threads'); },
+  async supportMarkRead(username, reader){ return this._call('POST', '/api/support/read', {username, reader}); },
+  async supportSetStatus(username, status){ return this._call('POST', '/api/support/status', {username, status}); },
+  async supportAssistant(question, history=[]){ const r = await this._call('POST', '/api/support/assistant', {question, history}); return r && !r.error ? r : null; },
+
   async resolveRequest(id, action, adminNote=''){
     await this._call('PATCH', `/api/requests/${id}`, {status: action, adminNote});
     window.dispatchEvent(new Event('ecoscope-update'));
@@ -2325,287 +2341,280 @@ function ExportMenu({data,currentVar,cc,source,startYear,endYear,plan,onUpgradeN
 // ══════════════════════════════════════════════
 // SUPPORT FORM COMPONENT
 // ══════════════════════════════════════════════
-function SupportForm({user}) {
-  const [type,setType]=useState("bug");
-  const [msg,setMsg]=useState("");
-  const [sent,setSent]=useState(false);
-  const [loading,setLoading]=useState(false);
-  const submit=async(e)=>{
-    e.preventDefault();
-    if(!msg.trim())return;
-    setLoading(true);
-    await new Promise(r=>setTimeout(r,900));
-    setLoading(false);setSent(true);
-  };
-  if(sent) return(
-    <div style={{background:`${C.teal}12`,border:`1px solid ${C.teal}44`,borderRadius:6,padding:"20px",textAlign:"center"}}>
-      <div style={{fontSize:28,marginBottom:10}}>✓</div>
-      <div style={{color:C.teal,fontSize:13,fontWeight:600,marginBottom:6}}>Ticket submitted!</div>
-      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>We'll reply to {user.email||user.username+"@ecoscope.app"} within 24 hours.</div>
-      <button onClick={()=>{setSent(false);setMsg("");}} style={{marginTop:14,background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 16px",color:C.mid,fontSize:11,cursor:"pointer",fontFamily:C.mono}}>Submit another</button>
+// ══════════════════════════════════════════════
+// SETTINGS MODAL
+// ══════════════════════════════════════════════
+// Section and field wrappers live at module level so inputs keep focus while typing.
+const StSec = ({ title, sub, children, right }) => (
+  <section style={{ marginBottom: 22 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, marginBottom: 10, paddingBottom: 8, borderBottom: `1px solid ${C.border}` }}>
+      <div>
+        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.text }}>{title}</h3>
+        {sub && <div style={{ fontSize: 12, color: C.mid, marginTop: 2 }}>{sub}</div>}
+      </div>
+      {right}
+    </div>
+    {children}
+  </section>
+);
+const StField = ({ label, hint, htmlFor, children }) => (
+  <div style={{ marginBottom: 14 }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8 }}>
+      <label htmlFor={htmlFor} style={{ color: C.text, fontSize: 12, fontWeight: 600 }}>{label}</label>
+      {hint && <span style={{ color: C.dim, fontSize: 11 }}>{hint}</span>}
+    </div>
+    {children}
+  </div>
+);
+// Password input with show / hide toggle
+const PasswordInput = ({ id, value, onChange, placeholder, autoComplete = "current-password", invalid = false }) => {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <input id={id} type={show ? "text" : "password"} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoComplete={autoComplete}
+        aria-invalid={invalid || undefined} style={{ ...inp, fontSize: 13, paddingRight: 42, borderColor: invalid ? C.red : undefined }} />
+      <button type="button" onClick={() => setShow(v => !v)} aria-label={show ? "Hide password" : "Show password"} aria-pressed={show}
+        style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", width: 34, height: 30, display: "flex", alignItems: "center", justifyContent: "center", background: "none", border: "none", borderRadius: 4, color: C.mid, cursor: "pointer" }}>
+        <Ico n={show ? "eyeoff" : "eye"} s={16} />
+      </button>
     </div>
   );
-  return(
-    <form onSubmit={submit}>
-      <div style={{marginBottom:14}}>
-        <div style={{color:C.mid,fontSize:10,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Ticket Type</div>
-        <div style={{display:"flex",gap:6}}>
-          {[["bug",<><Ico n="bug"/> Bug Report</>],["feature",<><Ico n="sparkle"/> Feature Request</>],["data",<><Ico n="chart"/> Data Issue</>],["other",<><Ico n="message"/> Other</>]].map(([v,l])=>(
-            <button key={v} type="button" onClick={()=>setType(v)} style={{...pill(type===v),fontSize:11,padding:"5px 10px"}}>{l}</button>
-          ))}
-        </div>
-      </div>
-      <div style={{marginBottom:14}}>
-        <div style={{color:C.mid,fontSize:10,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Your Email</div>
-        <input type="email" value={user.email||""} readOnly style={{...inp,fontSize:12,opacity:.7}}/>
-      </div>
-      <div style={{marginBottom:14}}>
-        <div style={{color:C.mid,fontSize:10,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8}}>Message</div>
-        <textarea value={msg} onChange={e=>setMsg(e.target.value)} placeholder="Describe your issue or request in detail..." rows={5} style={{...inp,resize:"vertical",fontSize:12,lineHeight:1.6}}/>
-      </div>
-      <button type="submit" disabled={loading||!msg.trim()} style={{background:C.gold,color:C.onGold,border:"none",borderRadius:6,padding:"10px 20px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:C.font,opacity:loading||!msg.trim()?.5:1}}>
-        {loading?"Sending…":"Submit Ticket →"}
-      </button>
-      <div style={{marginTop:16,padding:"11px 14px",background:C.card,borderRadius:6,border:`1px solid ${C.border}`}}>
-        <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}><Ico n="mail"/> Direct: <span style={{color:C.blue}}>support@ecoscope.app</span></div>
-        <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginTop:4}}><Ico n="book"/> Docs: <span style={{color:C.blue}}>docs.ecoscope.app</span></div>
-      </div>
+};
+const StBanner = ({ tone = "info", children }) => { const col = tone === "ok" ? C.teal : tone === "bad" ? C.red : tone === "warn" ? C.orange : C.blue;
+  return <div role={tone === "bad" ? "alert" : "status"} style={{ background: `${col}12`, border: `1px solid ${col}44`, borderRadius: 6, padding: "9px 12px", color: C.text, fontSize: 12, lineHeight: 1.55, marginBottom: 12 }}>{children}</div>; };
+
+function ChangePassword({ user }) {
+  const [cur, setCur] = useState(""); const [nw, setNw] = useState(""); const [cf, setCf] = useState("");
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState(null);
+  const errs = nw ? checkPw(nw) : []; const mismatch = cf && nw !== cf; const same = nw && cur && nw === cur;
+  const ready = cur && nw && cf && !errs.length && !mismatch && !same;
+  const submit = async (e) => { e.preventDefault(); if (!ready) return; setBusy(true); setMsg(null);
+    const r = await US.changePassword(user.username, cur, nw);
+    setBusy(false);
+    if (r.error) setMsg({ tone: "bad", text: r.error });
+    else { setMsg({ tone: "ok", text: "Password updated. Use the new password next time you sign in." }); setCur(""); setNw(""); setCf(""); }
+  };
+  return (
+    <form onSubmit={submit} noValidate>
+      {msg && <StBanner tone={msg.tone}>{msg.text}</StBanner>}
+      <StField label="Current password" htmlFor="pw-cur"><PasswordInput id="pw-cur" value={cur} onChange={setCur} placeholder="Enter your current password" /></StField>
+      <StField label="New password" htmlFor="pw-new"><PasswordInput id="pw-new" value={nw} onChange={setNw} placeholder="At least 8 characters" autoComplete="new-password" invalid={!!nw && errs.length > 0} /></StField>
+      {nw && <ul aria-label="Password requirements" style={{ listStyle: "none", margin: "-6px 0 12px", padding: 0, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: "2px 12px" }}>
+        {pwRules.map(rl => { const ok = rl.re.test(nw); return <li key={rl.msg} style={{ fontSize: 11, color: ok ? C.teal : C.mid }}>{ok ? "✓" : "○"} {rl.msg}</li>; })}
+        {same && <li style={{ fontSize: 11, color: C.red }}>✗ Must differ from the current password</li>}
+      </ul>}
+      <StField label="Confirm new password" htmlFor="pw-cf"><PasswordInput id="pw-cf" value={cf} onChange={setCf} placeholder="Repeat the new password" autoComplete="new-password" invalid={!!mismatch} /></StField>
+      {mismatch && <div style={{ fontSize: 11, color: C.red, marginTop: -8, marginBottom: 12 }}>Passwords do not match.</div>}
+      <button type="submit" disabled={!ready || busy} style={{ ...btn(), padding: "9px 18px", fontSize: 12, opacity: !ready || busy ? 0.5 : 1 }}>{busy ? "Updating…" : "Update password"}</button>
     </form>
   );
 }
 
-// ══════════════════════════════════════════════
-// SETTINGS MODAL
-// ══════════════════════════════════════════════
-
-function Settings({user, settings, onSave, onClose}) {
-  const [s,setS]=useState({...settings});
-  const [tab,setTab]=useState("account");
-  // Admin sees API Keys tab; regular users do not
-  const isAdmin=user?.role==="admin";
-  const tabs=[
-    {id:"account",icon:<Ico n="user"/>,label:"Account"},
-    {id:"data",icon:<Ico n="chart"/>,label:"Data Defaults"},
-    ...(isAdmin?[{id:"keys",icon:<Ico n="key"/>,label:"API Keys"}]:[]),
-    {id:"theme",icon:<Ico n="display"/>,label:"Themes"},
-    {id:"plan",icon:"⬡",label:"Subscription"},
-    {id:"support",icon:<Ico n="help"/>,label:"Support"},
-    {id:"help",icon:<Ico n="help"/>,label:"Help"},
+function Settings({ user, settings, onSave, onClose, initialTab = "account", onRequestUpgrade, onOpenSupport }) {
+  const isMobile = useIsMobile();
+  const [s, setS] = useState({ ...settings });
+  const [tab, setTab] = useState(initialTab);
+  const isAdmin = user?.role === "admin";
+  const plan = PLANS[user?.plan || "free"] || PLANS.free;
+  const dirty = JSON.stringify(s) !== JSON.stringify(settings);
+  useEffect(() => { const k = (e) => { if (e.key === "Escape") onClose(); }; window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
+  const tabs = [
+    { id: "account", icon: "user", label: "Account" },
+    { id: "security", icon: "lock", label: "Password & security" },
+    { id: "data", icon: "chart", label: "Data defaults" },
+    { id: "sources", icon: "globe", label: "Data sources" },
+    ...(isAdmin ? [{ id: "keys", icon: "key", label: "API keys" }] : []),
+    { id: "theme", icon: "display", label: "Appearance" },
+    { id: "plan", icon: "card", label: "Subscription" },
+    { id: "support", icon: "message", label: "Support" },
+    { id: "help", icon: "help", label: "Help & about" },
   ];
-  const Sec=({title,children})=>(<div style={{marginBottom:20}}><div style={{color:C.gold,fontSize:10,fontFamily:C.mono,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:12,paddingBottom:7,borderBottom:`1px solid ${C.border}`}}>{title}</div>{children}</div>);
-  const Field=({label,hint,children})=>(<div style={{marginBottom:14}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}><div style={{color:C.text,fontSize:12,fontWeight:600}}>{label}</div>{hint&&<span style={{color:C.dim,fontSize:11,fontFamily:C.mono}}>{hint}</span>}</div>{children}</div>);
+  const allSources = [...MACRO_SOURCES, ...MICRO_SOURCES].filter((x, i, a) => a.findIndex(y => y.id === x.id) === i);
+  const proLocked = (sid) => PRO_SOURCES.includes(sid) && !plan.aiInsights;
   return (
-    <div style={{position:"fixed",inset:0,background:C.overlay,display:"flex",alignItems:"center",justifyContent:"center",zIndex:999}}>
-      <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,width:620,maxHeight:"88vh",display:"flex",flexDirection:"column",fontFamily:C.font,boxShadow:C.shadow}}>
+    <div role="dialog" aria-modal="true" aria-labelledby="settings-title" style={{ position: "fixed", inset: 0, background: C.overlay, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, padding: isMobile ? 0 : 16 }}>
+      <div style={{ background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: isMobile ? 0 : 10, width: "100%", maxWidth: 860, height: isMobile ? "100%" : "min(88vh, 720px)", display: "flex", flexDirection: "column", fontFamily: C.font, boxShadow: C.shadow, overflow: "hidden" }}>
         {/* Header */}
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"20px 24px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <div style={{width:32,height:32,borderRadius:6,background:`${C.gold}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,color:C.onGold,fontWeight:700}}>◈</div>
-            <div><div style={{fontSize:15,fontWeight:700,color:C.text}}>Settings</div><div style={{fontSize:10,color:C.dim,fontFamily:C.mono}}>EcoScope Preferences</div></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 6, background: C.gold, color: C.onGold, display: "flex", alignItems: "center", justifyContent: "center" }}><Ico n="settings" s={17} /></div>
+            <div><h2 id="settings-title" style={{ margin: 0, fontSize: 16, fontWeight: 600, color: C.text }}>Settings</h2><div style={{ fontSize: 11, color: C.mid }}>Account, data and appearance</div></div>
           </div>
-          <button onClick={onClose} style={{background:`${C.border}`,border:"none",color:C.mid,cursor:"pointer",fontSize:14,width:28,height:28,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          <button type="button" onClick={onClose} aria-label="Close settings" style={{ background: "none", border: `1px solid ${C.border}`, color: C.mid, cursor: "pointer", width: 32, height: 32, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
         </div>
-        <div style={{display:"flex",flex:1,overflow:"hidden"}}>
-          {/* Sidebar tabs */}
-          <div style={{width:160,background:C.card,borderRight:`1px solid ${C.border}`,padding:"12px 8px",display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
-            {tabs.map(t=>(
-              <button key={t.id} onClick={()=>setTab(t.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",borderRadius:6,border:"none",background:tab===t.id?`${C.gold}15`:"transparent",cursor:"pointer",textAlign:"left",borderLeft:`2px solid ${tab===t.id?C.gold:"transparent"}`,transition:"all .12s"}}>
-                <span style={{fontSize:14}}>{t.icon}</span>
-                <span style={{color:tab===t.id?C.gold:C.mid,fontSize:12,fontWeight:tab===t.id?600:400}}>{t.label}</span>
-              </button>
-            ))}
-          </div>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", flex: 1, minHeight: 0 }}>
+          {/* Navigation */}
+          <nav aria-label="Settings sections" style={{ width: isMobile ? "100%" : 210, background: C.card, borderRight: isMobile ? "none" : `1px solid ${C.border}`, borderBottom: isMobile ? `1px solid ${C.border}` : "none", padding: isMobile ? "8px" : "12px 8px", display: "flex", flexDirection: isMobile ? "row" : "column", gap: 2, flexShrink: 0, overflowX: isMobile ? "auto" : "visible" }}>
+            {!isMobile && <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px 14px", marginBottom: 6, borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ width: 34, height: 34, borderRadius: "50%", background: user.avatarColor || C.gold, color: "#0b0e14", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 }}>{user.initials || "U"}</div>
+              <div style={{ minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.displayName || user.username}</div>
+                <span style={{ display: "inline-block", marginTop: 2, background: plan.color, color: C.onGold, borderRadius: 4, padding: "0 6px", fontSize: 10, fontWeight: 700 }}>{plan.badge}</span></div>
+            </div>}
+            {tabs.map(t => { const on = tab === t.id; return (
+              <button key={t.id} type="button" onClick={() => setTab(t.id)} aria-current={on ? "page" : undefined}
+                style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 6, border: "none", background: on ? `${C.gold}18` : "transparent", cursor: "pointer", textAlign: "left", whiteSpace: "nowrap", color: on ? C.gold : C.mid, fontSize: 13, fontWeight: on ? 600 : 500, flexShrink: 0 }}>
+                <Ico n={t.icon} s={15} />{t.label}
+              </button>); })}
+          </nav>
           {/* Content */}
-          <div id="scroll-settings" style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-            {tab==="account"&&(
-              <>
-                <Sec title="Profile">
-                  <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",background:C.card,borderRadius:6,marginBottom:14,border:`1px solid ${C.border}`}}>
-                    <div style={{width:44,height:44,borderRadius:"50%",background:user.avatarColor||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#0b0e14",flexShrink:0}}>{user.initials||"U"}</div>
-                    <div><div style={{color:C.text,fontSize:13,fontWeight:700}}>{user.username}</div><div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>{user.email||"—"}</div></div>
+          <div id="scroll-settings" style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px" : "20px 24px", minWidth: 0 }}>
+            {tab === "account" && <>
+              <StSec title="Profile">
+                <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 16px", background: C.card, borderRadius: 8, border: `1px solid ${C.border}`, flexWrap: "wrap" }}>
+                  <div style={{ width: 48, height: 48, borderRadius: "50%", background: user.avatarColor || C.gold, color: "#0b0e14", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17, fontWeight: 700, flexShrink: 0 }}>{user.initials || "U"}</div>
+                  <div style={{ flex: 1, minWidth: 160 }}>
+                    <div style={{ color: C.text, fontSize: 14, fontWeight: 600 }}>{s.displayName || user.username}</div>
+                    <div style={{ color: C.mid, fontSize: 12 }}>{user.email || "No email on file"}</div>
+                    <div style={{ color: C.dim, fontSize: 11, marginTop: 2 }}>Username: {user.username}{user.role ? ` · Role: ${user.role}` : ""}</div>
                   </div>
-                </Sec>
-                <Sec title="Account Details">
-                  <Field label="Display Name"><input value={s.displayName||user.username} onChange={e=>setS(x=>({...x,displayName:e.target.value}))} style={{...inp,fontSize:12}} placeholder="Your display name"/></Field>
-                  <Field label="Email Address"><input value={s.emailPref||user.email||""} onChange={e=>setS(x=>({...x,emailPref:e.target.value}))} type="email" style={{...inp,fontSize:12}} placeholder="your@email.com"/></Field>
-                </Sec>
-                <Sec title="Security">
-                  <Field label="Change Password" hint="Demo mode"><input type="password" placeholder="New password (demo only)" style={{...inp,fontSize:12,opacity:.6}} disabled/></Field>
-                  <div style={{background:`${C.teal}10`,border:`1px solid ${C.teal}33`,borderRadius:6,padding:"10px 13px"}}>
-                    <div style={{color:C.teal,fontSize:11,fontFamily:C.mono}}>✓ Demo mode — credentials are not persisted</div>
-                  </div>
-                </Sec>
-              </>
-            )}
-            {tab==="data"&&(
-              <>
-                <Sec title="Data Defaults">
-                  <Field label="Default Country"><select value={s.defaultCountry||"GH"} onChange={e=>setS(x=>({...x,defaultCountry:e.target.value}))} style={{...sel,fontSize:12}}>{COUNTRIES.map(c=><option key={c.code} value={c.code}>{c.flag} {c.name} ({c.region})</option>)}</select></Field>
-                  <Field label="Default Data Level">
-                    <div style={{display:"flex",gap:8}}>
-                      {["macro","micro"].map(l=>(<button key={l} onClick={()=>setS(x=>({...x,defaultLevel:l}))} style={{...pill(s.defaultLevel===l),flex:1,textAlign:"center",padding:"8px",textTransform:"capitalize",fontSize:11}}>{l==="macro"?<><Ico n="chart"/> Macro</>:<><Ico n="flask"/> Micro</>}</button>))}
-                    </div>
-                  </Field>
-                  <Field label="Default Source">
-                    <select value={s.defaultSource||"worldbank"} onChange={e=>setS(x=>({...x,defaultSource:e.target.value}))} style={{...sel,fontSize:12}}>
-                      {[...MACRO_SOURCES,...MICRO_SOURCES].map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
-                    </select>
-                  </Field>
-                </Sec>
-                <Sec title="Default Time Range">
-                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                    <div style={{flex:1}}><Field label="Start Year"><select value={s.startYear||2000} onChange={e=>setS(x=>({...x,startYear:+e.target.value}))} style={{...sel,fontSize:12}}>{YEARS.map(y=><option key={y} value={y}>{y}</option>)}</select></Field></div>
-                    <div style={{color:C.dim,fontSize:12,fontFamily:C.mono,paddingTop:14}}>→</div>
-                    <div style={{flex:1}}><Field label="End Year"><select value={s.endYear||2023} onChange={e=>setS(x=>({...x,endYear:+e.target.value}))} style={{...sel,fontSize:12}}>{YEARS.map(y=><option key={y} value={y}>{y}</option>)}</select></Field></div>
-                  </div>
-                </Sec>
-              </>
-            )}
-            {tab==="keys"&&isAdmin&&(
-              <>
-                <div style={{background:`${C.gold}0e`,border:`1px solid ${C.gold}33`,borderRadius:6,padding:"11px 14px",marginBottom:18}}>
-                  <div style={{color:C.gold,fontSize:11,fontFamily:C.mono}}><Ico n="key"/> Keys are stored in your browser session only and never sent to any third party.</div>
+                  <button type="button" onClick={() => setTab("plan")} style={{ ...pill(false), display: "inline-flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ background: plan.color, color: C.onGold, borderRadius: 4, padding: "0 6px", fontSize: 10, fontWeight: 700 }}>{plan.badge}</span>{plan.name} plan</button>
                 </div>
-                <Sec title="Anthropic Claude API">
-                  <Field label="API Key" hint={<a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:C.blue,fontFamily:C.mono,fontSize:11}}>Get key ↗</a>}>
-                    <input type="password" value={s.anthropicKey||""} onChange={e=>setS(x=>({...x,anthropicKey:e.target.value}))} placeholder="sk-ant-api03-..." style={{...inp,fontSize:12}}/>
-                    <p style={{color:s.anthropicKey?C.teal:C.red,fontSize:11,fontFamily:C.mono,marginTop:6,marginBottom:0}}>{s.anthropicKey?"✓ Key entered — AI Insights enabled":"⚠︎ Required for AI Insights"}</p>
-                  </Field>
-                </Sec>
-                <Sec title="FRED (Federal Reserve)">
-                  <Field label="API Key" hint={<a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" rel="noreferrer" style={{color:C.blue,fontFamily:C.mono,fontSize:11}}>Get free key ↗</a>}>
-                    <input type="password" value={s.fredKey||""} onChange={e=>setS(x=>({...x,fredKey:e.target.value}))} placeholder="Your FRED API key..." style={{...inp,fontSize:12}}/>
-                    <p style={{color:s.fredKey?C.teal:C.red,fontSize:11,fontFamily:C.mono,marginTop:6,marginBottom:0}}>{s.fredKey?"✓ Key entered — Federal Reserve data enabled":"⚠︎ Required for FRED data source"}</p>
-                  </Field>
-                </Sec>
-                <Sec title="Data Sources — No Key Required">
-                  <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
-                    {["World Bank","IMF WEO","WHO GHO","ILO STAT","UNESCO UIS","UNCTAD","BIS","UN Environment"].map(s=>(<div key={s} style={{background:`${C.teal}12`,border:`1px solid ${C.teal}33`,borderRadius:6,padding:"5px 10px",color:C.teal,fontSize:11,fontFamily:C.mono}}>✓ {s}</div>))}
-                  </div>
-                </Sec>
-              </>
-            )}
-            {tab==="theme"&&(
-              <>
-                <Sec title="Dashboard Theme">
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-                    {Object.entries(THEMES).map(([key,th])=>(
-                      <button key={key} onClick={()=>setS(x=>({...x,theme:key}))} style={{padding:"14px 16px",borderRadius:6,border:`2px solid ${s.theme===key?C.gold:C.border}`,background:th.bg,cursor:"pointer",textAlign:"left",transition:"border-color .15s"}}>
-                        <div style={{display:"flex",gap:6,marginBottom:8}}>
-                          {[th.surface,th.gold,th.teal,th.red].map((col,i)=><div key={i} style={{width:18,height:18,borderRadius:4,background:col,border:`1px solid ${th.borderHi}`}}/>)}
-                        </div>
-                        <div style={{color:th.text,fontSize:12,fontWeight:600}}>{th.label}</div>
-                        <div style={{color:th.mid,fontSize:10,fontFamily:C.mono,marginTop:2}}>{key}</div>
-                        {s.theme===key&&<div style={{color:C.gold,fontSize:10,fontFamily:C.mono,marginTop:4}}>✓ Active</div>}
-                      </button>
-                    ))}
-                  </div>
-                </Sec>
-                <Sec title="Chart Preferences">
-                  <Field label="Default Chart Type">
-                    <div style={{display:"flex",gap:7}}>
-                      {[["area","◭ Area"],["line","╱ Line"],["bar","▮ Bar"]].map(([t,l])=>(<button key={t} onClick={()=>setS(x=>({...x,chartType:t}))} style={{...pill(s.chartType===t),flex:1,textAlign:"center",padding:"8px",fontSize:11}}>{l}</button>))}
-                    </div>
-                  </Field>
-                  <Field label="Default View">
-                    <div style={{display:"flex",gap:7}}>
-                      {[["chart","◫ Chart"],["table","⊞ Table"]].map(([v,l])=>(<button key={v} onClick={()=>setS(x=>({...x,defaultView:v}))} style={{...pill(s.defaultView===v),flex:1,textAlign:"center",padding:"8px",fontSize:11}}>{l}</button>))}
-                    </div>
-                  </Field>
-                </Sec>
-              </>
-            )}
-            {tab==="plan"&&(
-              <>
-                <Sec title="Your Current Plan">
-                  <div style={{background:C.card,border:`2px solid ${PLANS[s.plan||"pro"].color}55`,borderRadius:8,padding:"16px 18px",marginBottom:16}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
-                      <div style={{background:PLANS[s.plan||"pro"].color,color:C.onGold,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700,fontFamily:C.mono}}>{PLANS[s.plan||"pro"].badge}</div>
-                      <div style={{color:PLANS[s.plan||"pro"].color,fontSize:14,fontWeight:700}}>{PLANS[s.plan||"pro"].name}</div>
-                      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginLeft:"auto"}}>{PLANS[s.plan||"pro"].priceLabel}</div>
-                    </div>
-                  </div>
-                </Sec>
-                <Sec title="Available Plans">
-                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                    {Object.entries(PLANS).map(([key,pl])=>(
-                      <div key={key} onClick={()=>setS(x=>({...x,plan:key}))} style={{padding:"14px 16px",borderRadius:6,border:`2px solid ${(s.plan||"pro")===key?pl.color:C.border}`,background:(s.plan||"pro")===key?`${pl.color}10`:C.card,cursor:"pointer",transition:"all .15s"}}>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                          <div style={{display:"flex",alignItems:"center",gap:8}}>
-                            <div style={{background:pl.color,color:C.onGold,borderRadius:5,padding:"2px 8px",fontSize:11,fontWeight:700,fontFamily:C.mono}}>{pl.badge}</div>
-                            <span style={{color:pl.color,fontSize:13,fontWeight:700}}>{pl.name}</span>
-                          </div>
-                          <span style={{color:C.mid,fontSize:12,fontFamily:C.mono,fontWeight:600}}>{pl.priceLabel}</span>
-                        </div>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                          {[
-                            pl.sources==="all"?"All 10 sources":`${pl.sources.length} sources`,
-                            pl.aiInsights?"AI Insights ✓":"No AI Insights",
-                            `Exports: ${pl.exports.join(", ").toUpperCase()}`,
-                            pl.compare?"Country compare ✓":"No compare",
-                          ].map((f,i)=><span key={i} style={{background:C.surface,borderRadius:5,padding:"3px 8px",color:C.mid,fontSize:10,fontFamily:C.mono}}>{f}</span>)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </Sec>
-                <div style={{background:`${C.teal}10`,border:`1px solid ${C.teal}33`,borderRadius:6,padding:"11px 14px"}}>
-                  <div style={{color:C.teal,fontSize:11,fontFamily:C.mono}}><Ico n="card"/> Demo mode — plan switching is free. In production, integrate Stripe or Paystack for billing.</div>
+              </StSec>
+              <StSec title="Account details" sub="Shown in the app and on support tickets.">
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "0 16px" }}>
+                  <StField label="Display name" htmlFor="st-name"><input id="st-name" value={s.displayName ?? user.username} onChange={e => setS(x => ({ ...x, displayName: e.target.value }))} style={{ ...inp, fontSize: 13 }} placeholder="Your display name" autoComplete="name" /></StField>
+                  <StField label="Contact email" htmlFor="st-email" hint="for replies"><input id="st-email" value={s.emailPref ?? user.email ?? ""} onChange={e => setS(x => ({ ...x, emailPref: e.target.value }))} type="email" style={{ ...inp, fontSize: 13 }} placeholder="you@example.com" autoComplete="email" /></StField>
                 </div>
-              </>
-            )}
-            {tab==="support"&&(
-              <>
-                <Sec title="Submit a Support Ticket">
-                  <SupportForm user={user}/>
-                </Sec>
-                <Sec title="Quick Help">
-                  {[
-                    {q:"Why is my chart empty?",a:"No data exists for the selected country/indicator/year range. Try expanding the year range or switching to World Bank source."},
-                    {q:"AI Insights not working?",a:"Add your Anthropic API key in the API Keys tab. The key starts with sk-ant-api03-."},
-                    {q:"How do I compare countries?",a:"Enable the Compare Countries checkbox at the bottom of the left sidebar, then select a second country."},
-                    {q:"Can I export to Excel?",a:"Yes — click the XLS button above the chart. PDF is also available via the PDF button."},
-                    {q:"How do I resize the sidebar?",a:"Drag the thin vertical line between the sidebar and the chart area left or right."},
-                    {q:"What's the difference between Macro and Micro data?",a:"Macro covers GDP, trade, fiscal and monetary data. Micro covers health, labour, education and environment indicators."},
-                  ].map(({q,a},i)=>(
-                    <div key={i} style={{marginBottom:12,padding:"11px 14px",background:C.card,borderRadius:6,border:`1px solid ${C.border}`}}>
-                      <div style={{color:C.gold,fontSize:12,fontWeight:600,marginBottom:5}}>Q: {q}</div>
-                      <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>{a}</div>
-                    </div>
-                  ))}
-                </Sec>
-              </>
-            )}
-            {tab==="help"&&(
-              <>
-                <Sec title="Documentation & Links">
-                  {[{icon:<Ico n="globe"/>,name:"World Bank Open Data",url:"https://data.worldbank.org",desc:"1,400+ global indicators"},
-                    {icon:<Ico n="chart"/>,name:"IMF Data Mapper",url:"https://www.imf.org/external/datamapper",desc:"Macro projections & history"},
-                    {icon:<Ico n="bank"/>,name:"FRED Economic Data",url:"https://fred.stlouisfed.org",desc:"800K+ US & global series"},
-                    {icon:<Ico n="flask"/>,name:"WHO Global Health Observatory",url:"https://www.who.int/data/gho",desc:"Global health statistics"},
-                    {icon:<Ico n="briefcase"/>,name:"ILO STAT",url:"https://ilostat.ilo.org",desc:"Labour market data"},
-                    {icon:<Ico n="cap"/>,name:"UNESCO UIS",url:"https://uis.unesco.org",desc:"Education statistics"},
-                    {icon:<Ico n="bank"/>,name:"Bank of Ghana",url:"https://www.bog.gov.gh/economic-data/",desc:"Ghana monetary data"},
-                  ].map(r=>(<a key={r.name} href={r.url} target="_blank" rel="noreferrer" style={{display:"flex",alignItems:"center",gap:12,padding:"10px 13px",background:C.card,borderRadius:6,marginBottom:8,border:`1px solid ${C.border}`,textDecoration:"none",transition:"border-color .15s"}}>
-                    <span style={{fontSize:20}}>{r.icon}</span>
-                    <div><div style={{color:C.text,fontSize:12,fontWeight:600}}>{r.name}</div><div style={{color:C.dim,fontSize:11,fontFamily:C.mono}}>{r.desc}</div></div>
-                    <span style={{marginLeft:"auto",color:C.dim,fontSize:11}}>↗</span>
-                  </a>))}
-                </Sec>
-                <Sec title="About EcoScope">
-                  <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:"13px 15px"}}>
-                    <div style={{color:C.text,fontSize:12,marginBottom:4,fontWeight:600}}>EcoScope v2.0</div>
-                    <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,lineHeight:1.7}}>Global Economic Intelligence Platform. Data from World Bank, IMF, FRED, WHO, ILO, UNESCO, Bank of Ghana, BIS and UNCTAD. AI insights powered by Claude (Anthropic).</div>
+              </StSec>
+              <StSec title="Shortcuts">
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3,1fr)", gap: 10 }}>
+                  {[["lock", "Change password", "security"], ["chart", "Data defaults", "data"], ["message", "Contact support", "support"]].map(([ic, l, t]) =>
+                    <button key={t} type="button" onClick={() => setTab(t)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, fontSize: 13, cursor: "pointer", textAlign: "left" }}><Ico n={ic} s={16} />{l}</button>)}
+                </div>
+              </StSec>
+            </>}
+            {tab === "security" && <>
+              <StSec title="Change password" sub="You will need your current password.">
+                <ChangePassword user={user} />
+              </StSec>
+              <StSec title="Session">
+                <div style={{ fontSize: 12, color: C.mid, lineHeight: 1.6 }}>You are signed in as <b style={{ color: C.text }}>{user.username}</b> on this browser. Signing out clears the saved session on this device.</div>
+              </StSec>
+            </>}
+            {tab === "data" && <>
+              <StSec title="Defaults for new sessions">
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: "0 16px" }}>
+                  <StField label="Default country" htmlFor="st-country"><select id="st-country" value={s.defaultCountry || "GH"} onChange={e => setS(x => ({ ...x, defaultCountry: e.target.value }))} style={{ ...sel, fontSize: 13 }}>{COUNTRIES.map(c => <option key={c.code} value={c.code}>{c.name} ({c.region})</option>)}</select></StField>
+                  <StField label="Default source" htmlFor="st-src"><select id="st-src" value={s.defaultSource || "worldbank"} onChange={e => setS(x => ({ ...x, defaultSource: e.target.value }))} style={{ ...sel, fontSize: 13 }}>{allSources.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}</select></StField>
+                  <StField label="Start year" htmlFor="st-y0"><select id="st-y0" value={s.startYear || 2000} onChange={e => setS(x => ({ ...x, startYear: +e.target.value }))} style={{ ...sel, fontSize: 13 }}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></StField>
+                  <StField label="End year" htmlFor="st-y1"><select id="st-y1" value={s.endYear || 2023} onChange={e => setS(x => ({ ...x, endYear: +e.target.value }))} style={{ ...sel, fontSize: 13 }}>{YEARS.map(y => <option key={y} value={y}>{y}</option>)}</select></StField>
+                </div>
+                <StField label="Default data level">
+                  <div role="group" aria-label="Default data level" style={{ display: "flex", gap: 8 }}>
+                    {[["macro", "Macro", "chart"], ["micro", "Micro", "flask"]].map(([l, t, ic]) => <button key={l} type="button" aria-pressed={(s.defaultLevel || "macro") === l} onClick={() => setS(x => ({ ...x, defaultLevel: l }))} style={{ ...pill((s.defaultLevel || "macro") === l), flex: 1, padding: "8px", display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center", fontSize: 12 }}><Ico n={ic} />{t}</button>)}
                   </div>
-                </Sec>
-              </>
-            )}
+                </StField>
+              </StSec>
+            </>}
+            {tab === "sources" && <>
+              <StSec title="Data sources" sub={`${allSources.length} sources. Most are served through the World Bank API.`}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr>{["Source", "Variables", "Access", "Coverage"].map((h, i) => <th key={h} scope="col" style={{ ...thS, textAlign: i === 1 ? "right" : "left" }}>{h}</th>)}</tr></thead>
+                    <tbody>{allSources.map(x => { const locked = proLocked(x.id); return (
+                      <tr key={x.id}>
+                        <td style={{ ...tdS, whiteSpace: "normal" }}><span aria-hidden="true" style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: x.color, marginRight: 8 }} /><a href={x.url} target="_blank" rel="noreferrer" style={{ color: C.text }}>{x.name}</a></td>
+                        <td style={tdN}>{(x.vars || []).length}</td>
+                        <td style={tdS}>{locked ? <span style={{ color: C.orange }}><Ico n="lock" /> Pro</span> : x.keyRequired ? <span style={{ color: C.mid }}><Ico n="key" /> API key</span> : <span style={{ color: C.teal }}>✓ Open</span>}</td>
+                        <td style={{ ...tdS, color: C.mid }}>{x.countryFixed ? (x.id === "fred" ? "United States" : x.region) : (x.region || "Global")}</td>
+                      </tr>); })}</tbody>
+                  </table>
+                </div>
+                {!plan.aiInsights && <div style={{ marginTop: 12 }}><StBanner tone="warn">Sources marked Pro need a Pro or Enterprise plan. <button type="button" onClick={() => setTab("plan")} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", padding: 0, fontSize: 12, textDecoration: "underline" }}>See plans</button></StBanner></div>}
+              </StSec>
+            </>}
+            {tab === "keys" && isAdmin && <>
+              <StBanner>Keys entered here are stored with your account settings and used from this browser.</StBanner>
+              <StSec title="Anthropic API" right={<a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Get a key ↗</a>}>
+                <StField label="API key" htmlFor="k-ant"><PasswordInput id="k-ant" value={s.anthropicKey || ""} onChange={v => setS(x => ({ ...x, anthropicKey: v }))} placeholder="sk-ant-api03-…" autoComplete="off" /></StField>
+                <div style={{ fontSize: 12, color: s.anthropicKey ? C.teal : C.mid }}>{s.anthropicKey ? "✓ AI insights enabled" : "Needed for the optional AI narrative."}</div>
+              </StSec>
+              <StSec title="FRED (Federal Reserve)" right={<a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Get a free key ↗</a>}>
+                <StField label="API key" htmlFor="k-fred"><PasswordInput id="k-fred" value={s.fredKey || ""} onChange={v => setS(x => ({ ...x, fredKey: v }))} placeholder="Your FRED API key" autoComplete="off" /></StField>
+                <div style={{ fontSize: 12, color: s.fredKey ? C.teal : C.mid }}>{s.fredKey ? "✓ FRED data enabled" : "Needed for the FRED source."}</div>
+              </StSec>
+            </>}
+            {tab === "theme" && <>
+              <StSec title="Theme">
+                <div role="radiogroup" aria-label="Theme" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(3,1fr)", gap: 10 }}>
+                  {Object.entries(THEMES).map(([key, th]) => { const on = (s.theme || "dark") === key; return (
+                    <button key={key} type="button" role="radio" aria-checked={on} onClick={() => setS(x => ({ ...x, theme: key }))} style={{ padding: "12px 14px", borderRadius: 8, border: `2px solid ${on ? C.gold : C.border}`, background: th.bg, cursor: "pointer", textAlign: "left" }}>
+                      <div style={{ display: "flex", gap: 5, marginBottom: 8 }}>{[th.surface, th.gold, th.teal, th.red].map((col, i) => <span key={i} style={{ width: 16, height: 16, borderRadius: 4, background: col, border: `1px solid ${th.borderHi}` }} />)}</div>
+                      <div style={{ color: th.text, fontSize: 13, fontWeight: 600 }}>{th.label}</div>
+                      <div style={{ color: th.mid, fontSize: 11 }}>{th.scheme === "dark" ? "Dark" : "Light"}{on ? " · selected" : ""}</div>
+                    </button>); })}
+                </div>
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>The theme applies when you save.</div>
+              </StSec>
+              <StSec title="Charts">
+                <StField label="Default chart type"><div role="group" aria-label="Default chart type" style={{ display: "flex", gap: 8 }}>{[["area", "Area"], ["line", "Line"], ["bar", "Bar"]].map(([t, l]) => <button key={t} type="button" aria-pressed={s.chartType === t} onClick={() => setS(x => ({ ...x, chartType: t }))} style={{ ...pill(s.chartType === t), flex: 1, padding: "8px", fontSize: 12 }}>{l}</button>)}</div></StField>
+                <StField label="Default view"><div role="group" aria-label="Default view" style={{ display: "flex", gap: 8 }}>{[["chart", "Chart"], ["table", "Table"]].map(([v, l]) => <button key={v} type="button" aria-pressed={s.defaultView === v} onClick={() => setS(x => ({ ...x, defaultView: v }))} style={{ ...pill(s.defaultView === v), flex: 1, padding: "8px", fontSize: 12 }}>{l}</button>)}</div></StField>
+              </StSec>
+            </>}
+            {tab === "plan" && <>
+              <StSec title="Current plan">
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", border: `1px solid ${plan.color}66`, background: `${plan.color}10`, borderRadius: 8, flexWrap: "wrap" }}>
+                  <span style={{ background: plan.color, color: C.onGold, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>{plan.badge}</span>
+                  <div style={{ flex: 1, minWidth: 160 }}><div style={{ color: C.text, fontSize: 14, fontWeight: 600 }}>{plan.name}</div><div style={{ color: C.mid, fontSize: 12 }}>{plan.desc}</div></div>
+                  <div style={{ color: C.text, fontSize: 13, fontWeight: 600 }}>{plan.priceLabel}</div>
+                </div>
+              </StSec>
+              <StSec title="Compare plans">
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr><th scope="col" style={thS}>Feature</th>{Object.values(PLANS).map(p => <th key={p.id} scope="col" style={{ ...thS, textAlign: "center", color: p.id === plan.id ? C.gold : C.mid }}>{p.name}{p.id === plan.id ? " (yours)" : ""}</th>)}</tr></thead>
+                    <tbody>{[
+                      ["Price", p => p.priceLabel],
+                      ["Data sources", p => p.sources === "all" ? "All" : `${p.sources.length}`],
+                      ["AI insights", p => p.aiInsights ? "✓" : "—"],
+                      ["Exports", p => p.exports.join(", ").toUpperCase()],
+                      ["Country comparison", p => p.compare ? "✓" : "—"],
+                      ["Years of history", p => `${p.maxYears}`],
+                    ].map(([f, fn]) => <tr key={f}><td style={tdS}>{f}</td>{Object.values(PLANS).map(p => <td key={p.id} style={{ ...tdS, textAlign: "center" }}>{fn(p)}</td>)}</tr>)}</tbody>
+                  </table>
+                </div>
+                {plan.id !== "enterprise" && <button type="button" onClick={() => { onClose(); onRequestUpgrade && onRequestUpgrade(); }} style={{ ...btn(), marginTop: 14, padding: "9px 18px", fontSize: 12 }}>Request an upgrade</button>}
+                <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>Upgrades are reviewed by an administrator.</div>
+              </StSec>
+            </>}
+            {tab === "support" && <>
+              <StSec title="Get help" sub="Ask the assistant how a feature works, or message the EcoScope team.">
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+                  <button type="button" onClick={() => { onClose(); onOpenSupport && onOpenSupport("assistant"); }} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", textAlign: "left", color: C.text }}>
+                    <Ico n="sparkle" s={18} /><span><b style={{ fontSize: 13 }}>Ask the assistant</b><span style={{ display: "block", fontSize: 12, color: C.mid, marginTop: 2 }}>Instant answers about features and methods.</span></span></button>
+                  <button type="button" onClick={() => { onClose(); onOpenSupport && onOpenSupport("support"); }} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, cursor: "pointer", textAlign: "left", color: C.text }}>
+                    <Ico n="message" s={18} /><span><b style={{ fontSize: 13 }}>Message support</b><span style={{ display: "block", fontSize: 12, color: C.mid, marginTop: 2 }}>Report a bug, a data issue or a billing question. Replies appear in the chat.</span></span></button>
+                </div>
+              </StSec>
+              <StSec title="Common questions">
+                {SUPPORT_FAQ.slice(0, 6).map(f => <details key={f.q} style={{ padding: "10px 12px", background: C.card, border: `1px solid ${C.border}`, borderRadius: 6, marginBottom: 8 }}>
+                  <summary style={{ cursor: "pointer", color: C.text, fontSize: 13, fontWeight: 500 }}>{f.q}</summary>
+                  <div style={{ color: C.mid, fontSize: 12, lineHeight: 1.6, marginTop: 8 }}>{f.a}</div></details>)}
+              </StSec>
+            </>}
+            {tab === "help" && <>
+              <StSec title="Data providers">
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8 }}>
+                  {[["globe", "World Bank Open Data", "https://data.worldbank.org", "1,400+ global indicators"], ["chart", "IMF Data Mapper", "https://www.imf.org/external/datamapper", "Macro projections and history"],
+                    ["bank", "FRED", "https://fred.stlouisfed.org", "US economic data"], ["flask", "WHO Global Health Observatory", "https://www.who.int/data/gho", "Health statistics"],
+                    ["briefcase", "ILOSTAT", "https://ilostat.ilo.org", "Labour market data"], ["cap", "UNESCO UIS", "https://uis.unesco.org", "Education statistics"],
+                    ["bank", "Bank of Ghana", "https://www.bog.gov.gh/economic-data/", "Ghana monetary data"]].map(([ic, n, u, d]) =>
+                    <a key={n} href={u} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: C.card, borderRadius: 6, border: `1px solid ${C.border}`, textDecoration: "none" }}>
+                      <span style={{ color: C.mid }}><Ico n={ic} s={18} /></span><span style={{ flex: 1 }}><span style={{ display: "block", color: C.text, fontSize: 13, fontWeight: 500 }}>{n}</span><span style={{ color: C.dim, fontSize: 11 }}>{d}</span></span><span style={{ color: C.dim }}>↗</span></a>)}
+                </div>
+              </StSec>
+              <StSec title="About EcoScope">
+                <div style={{ color: C.mid, fontSize: 12, lineHeight: 1.7 }}>EcoScope v2.1 · Global economic intelligence platform. Data from the World Bank, IMF, FRED, WHO, ILO, UNESCO, Bank of Ghana, BIS and UNCTAD. Causal tools: DAG builder, matching and weighting, synthetic control. Optional AI narratives powered by Claude (Anthropic).</div>
+              </StSec>
+            </>}
           </div>
         </div>
         {/* Footer */}
-        <div style={{borderTop:`1px solid ${C.border}`,padding:"14px 24px",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0}}>
-          <button onClick={onClose} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"9px 18px",color:C.mid,fontSize:12,cursor:"pointer",fontFamily:C.font}}>Cancel</button>
-          <button onClick={()=>{onSave(s);onClose();}} style={{...btn(),padding:"9px 24px",fontSize:12}}>Save Changes</button>
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: "12px 20px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {dirty && <span style={{ marginRight: "auto", fontSize: 12, color: C.mid }}>Unsaved changes</span>}
+          <button type="button" onClick={onClose} style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "9px 18px", color: C.mid, fontSize: 12, cursor: "pointer" }}>{dirty ? "Cancel" : "Close"}</button>
+          <button type="button" disabled={!dirty} onClick={() => { onSave(s); onClose(); }} style={{ ...btn(), padding: "9px 22px", fontSize: 12, opacity: dirty ? 1 : 0.5 }}>Save changes</button>
         </div>
       </div>
     </div>
@@ -3403,7 +3412,7 @@ const OverlapPlot = ({ ps, d, lo, hi }) => {
 };
 
 // ── Matching tab ──
-function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry }) {
+function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry, incoming }) {
   const [data,setData]=useState(null); const [fileErr,setFileErr]=useState("");
   const [cfg,setCfg]=useState({ y:"", d:"", treatValue:"", covs:[], exact:[], squares:false, missing:"drop", estimand:"ATT", trim:0, M:1, metric:"mahalanobis", replace:true, biasAdj:true, caliper:0, strata:5, cemBins:0, B:199,
     methods:{ subclass:true, nn:true, psm:true, ipw:true, aipw:true, cem:true } });
@@ -3441,6 +3450,8 @@ function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry
         note:`Units are countries. Outcome = ${b.measure==="post"? `average ${b.t0}–${b.y1}` : `average ${b.t0}–${b.y1} minus average ${b.y0}–${b.t0-1}`}; covariates = averages ${b.y0}–${b.t0-1}${b.applyEco? ` (${ciEcoNote(eco)})` : ""}. Treated: ${b.mode==="pick"? b.treated.map(c=>COUNTRIES.find(x=>x.code===c)?.name).join(", ") : `pre-period ${ecoItems.find(e=>e.key===b.ruleVar)?.name} ${b.op} ${b.thr}`}.${ruleInCovs? " Warning: treatment is a deterministic cutoff on a covariate, so treated and controls cannot overlap on it. A threshold design calls for regression discontinuity, not matching." : ""}` });
     setB("open",false);
   };
+  useEffect(()=>{ if (incoming?.table) load(incoming.table, incoming.name); // data handed over from Data structure
+  },[incoming?.id]);
   const onFile=(f)=>{ if(!f) return; if (f.size>25*1024*1024){ setFileErr("File is larger than 25 MB. Upload a sample or fewer columns."); return; }
     const r=new FileReader(); r.onload=()=>load(ciParseCSV(String(r.result)), f.name); r.readAsText(f); };
   const dVals = useMemo(()=>{ if(!data||!cfg.d) return []; const i=data.headers.indexOf(cfg.d); return [...new Set(data.rows.map(r=>String(r[i]??"").trim()))].filter(Boolean).slice(0,12); },[data,cfg.d]);
@@ -3628,12 +3639,12 @@ function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry
 }
 
 // ── Synthetic control tab ──
-function SynthTab({ defaultCountry, defaultVar, isMobile, imported, basket=[], eco, years }) {
+function SynthTab({ defaultCountry, defaultVar, isMobile, imported, basket=[], eco, years, incoming }) {
   const vars=useMemo(()=>ciWBVarList(),[]);
   const initVar = vars.find(v=>v.code===defaultVar)?.code || vars.find(v=>v.code==="NY.GDP.PCAP.KD")?.code || vars[0]?.code;
   const ecoItems = useMemo(()=>basket.map(it=>({ key:ciItemKey(it), name:it.label, src:it.sourceName, ...ciResolveItem(it) })),[basket]);
   const ecoUsable = ecoItems.filter(x=>x.route!=="none");
-  const [ecoY,setEcoY]=useState(()=>ecoUsable[0]?.key||""); const [ecoCovs,setEcoCovs]=useState([]); const [applyEco,setApplyEco]=useState(true);
+  const [ecoY,setEcoY]=useState(()=>ecoUsable[0]?.key||""); const [applyEco,setApplyEco]=useState(true);
   const [cfg,setCfg]=useState({ src:"wb", y:initVar, treated:defaultCountry||"GH", t0: 2005, y0: 1995, y1: Math.min(CURRENT_YEAR-2, 2023), region:"All", exclude:[], mode:"outcome", covs:[], lags:true, mult:5, fill:"interp" });
   const [table,setTable]=useState(null); const [map,setMap]=useState({ format:"long", unit:"", time:"", y:"", covs:[] }); const [fileErr,setFileErr]=useState("");
   const [res,setRes]=useState(null); const [busy,setBusy]=useState(""); const [err,setErr]=useState(""); const [info,setInfo]=useState(null); const [panelOut,setPanelOut]=useState(null);
@@ -3649,6 +3660,8 @@ function SynthTab({ defaultCountry, defaultVar, isMobile, imported, basket=[], e
     setTable({ ...parsed, name }); setMap({ format, unit:unit||"", time, y, covs:[] });
     setCfg(c=>({...c, src:"csv", covs:[], exclude:[]})); };
   const onFile=(f)=>{ if(!f) return; const r=new FileReader(); r.onload=()=>loadTable(ciParseCSV(String(r.result)), f.name); r.readAsText(f); };
+  useEffect(()=>{ if (incoming?.table) loadTable(incoming.table, incoming.name); // data handed over from Data structure
+  },[incoming?.id]);
   const panel = useMemo(()=>{ if (cfg.src!=="csv"||!table) return null; if (map.format==="long" && (!map.unit||!map.time||!map.y)) return null; if (!map.time) return null;
     return ciPanelFromTable(table.headers, table.rows, map); },[cfg.src, table, map]);
   // when a new panel (file or column mapping) is loaded: use its full year range and a valid treated unit
@@ -3900,8 +3913,307 @@ const MethodsGuide = () => (
   </div>
 );
 
-function ImpactLab({ onClose, defaultCountry, defaultVar, imported, basket=[], eco, years }) {
-  const isMobile=useIsMobile(); const [tab,setTab]=useState("match");
+// ══════════════════════════════════════════════
+// DATA STRUCTURING: detect cross-section / time series / panel, then reshape
+// ══════════════════════════════════════════════
+// Parse a cell or header as a time value. Returns {t, label, freq} or null.
+const dsParseTime = (v) => {
+  const s = String(v ?? "").trim(); if (!s) return null;
+  let m;
+  if ((m = s.match(/^(1[89]\d\d|20\d\d)(?:\s*\[YR\d{4}\])?$/))) return { t: +m[1], label: m[1], freq: "annual" };
+  if ((m = s.match(/^YR(1[89]\d\d|20\d\d)$/i))) return { t: +m[1], label: m[1], freq: "annual" };
+  if ((m = s.match(/^(1[89]\d\d|20\d\d)\s*[-_ ]?\s*Q([1-4])$/i)) || (m = s.match(/^Q([1-4])\s*[-_ ]?\s*(1[89]\d\d|20\d\d)$/i))) {
+    const y = +(m[1].length === 4 ? m[1] : m[2]), q = +(m[1].length === 4 ? m[2] : m[1]); return { t: y + (q - 1) / 4, label: `${y}-Q${q}`, freq: "quarterly" }; }
+  if ((m = s.match(/^(1[89]\d\d|20\d\d)[-/M](0?[1-9]|1[0-2])$/))) return { t: +m[1] + (+m[2] - 1) / 12, label: `${m[1]}-${String(+m[2]).padStart(2, "0")}`, freq: "monthly" };
+  if ((m = s.match(/^(1[89]\d\d|20\d\d)-(\d{1,2})-(\d{1,2})(?:[ T].*)?$/))) { const d = new Date(+m[1], +m[2] - 1, +m[3]); if (!isNaN(d)) return { t: d.getTime() / 864e5, label: `${m[1]}-${String(+m[2]).padStart(2, "0")}-${String(+m[3]).padStart(2, "0")}`, freq: "daily" }; }
+  if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) { const d = new Date(+m[3], +m[1] - 1, +m[2]); if (!isNaN(d)) return { t: d.getTime() / 864e5, label: d.toISOString().slice(0, 10), freq: "daily" }; }
+  return null;
+};
+const dsNum = (v) => { const s = String(v ?? "").trim(); if (!s || /^(na|n\/a|nan|null|\.|-|\.\.)$/i.test(s)) return null; const n = parseFloat(s.replace(/[$,%\s]/g, "")); return isFinite(n) && /^[-+]?[$]?\d|^[-+]?\.\d/.test(s.replace(/\s/g, "")) ? n : null; };
+const DS_TIME_HINT = /^(year|yr|date|time|period|quarter|month|day|t)$|year|date|period|quarter|month/i;
+const DS_UNIT_HINT = /country|state|province|region|district|unit|^id$|_id$|^iso|code|name|firm|company|household|person|respondent|school|county|city|entity|economy/i;
+const DS_VAR_HINT = /^(variable|indicator|series|measure|var|item|series name|indicator name)$|indicator|series name|variable/i;
+const DS_VAL_HINT = /^(value|val|obs|observation|amount)$/i;
+const DS_COUNTRY_SET = new Set(COUNTRIES.flatMap(c => [c.name.toLowerCase(), c.code.toLowerCase(), (ISO3[c.code] || "").toLowerCase()]).filter(Boolean));
+
+// Profile each column
+const dsProfile = (headers, rows) => headers.map((h, j) => {
+  const vals = rows.map(r => r[j]).filter(v => v != null && String(v).trim() !== "");
+  const n = vals.length || 1; const uniq = new Set(vals.map(v => String(v).trim()));
+  const nNum = vals.filter(v => dsNum(v) != null).length; const tm = vals.map(dsParseTime).filter(Boolean);
+  const freqs = {}; tm.forEach(x => freqs[x.freq] = (freqs[x.freq] || 0) + 1); const freq = Object.entries(freqs).sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  const countryShare = [...uniq].filter(u => DS_COUNTRY_SET.has(u.toLowerCase())).length / (uniq.size || 1);
+  return { name: h, j, n: vals.length, uniq: uniq.size, numShare: nNum / n, timeShare: tm.length / n, freq, countryShare, headerTime: dsParseTime(h) };
+});
+
+// Automatic detection. Returns a spec that dsToTidy understands plus a human explanation.
+const dsDetect = (headers, rows) => {
+  const P = dsProfile(headers, rows); const N = rows.length; const reasons = [];
+  const timeHeaders = P.filter(p => p.headerTime);
+  // A. wide by time: many headers are years/quarters
+  if (timeHeaders.length >= 3) {
+    const ids = P.filter(p => !p.headerTime);
+    const varCol = ids.find(p => DS_VAR_HINT.test(p.name)) || null;
+    const unitCol = ids.filter(p => p !== varCol && p.numShare < 0.5).sort((a, b) => (DS_UNIT_HINT.test(b.name) - DS_UNIT_HINT.test(a.name)) || (b.countryShare - a.countryShare) || (b.uniq - a.uniq))[0] || null;
+    const nUnits = unitCol ? unitCol.uniq : 1;
+    reasons.push(`${timeHeaders.length} column headers are time periods (${timeHeaders[0].name} … ${timeHeaders[timeHeaders.length - 1].name}), so the table is wide by time.`);
+    if (unitCol) reasons.push(`"${unitCol.name}" identifies ${nUnits} unit${nUnits === 1 ? "" : "s"}.`);
+    if (varCol) reasons.push(`"${varCol.name}" names the variable in each row.`);
+    return { layout: "wideTime", unitCol: unitCol?.name || "", varCol: varCol?.name || "", timeCols: timeHeaders.map(p => p.name), type: nUnits > 1 ? "panel" : "timeseries", freq: timeHeaders[0].headerTime.freq, reasons, profile: P };
+  }
+  // B. a time column
+  const timeCol = P.filter(p => p.timeShare >= 0.9 && p.n > 0).sort((a, b) => (DS_TIME_HINT.test(b.name) - DS_TIME_HINT.test(a.name)) || (b.timeShare - a.timeShare) || (a.uniq - b.uniq))[0] || null;
+  const valueCols = P.filter(p => p !== timeCol && p.numShare >= 0.8);
+  let unitCol = P.filter(p => p !== timeCol && (p.numShare < 0.5 || (DS_UNIT_HINT.test(p.name) && p.uniq < N)) && !DS_VAR_HINT.test(p.name))
+                 .sort((a, b) => (DS_UNIT_HINT.test(b.name) - DS_UNIT_HINT.test(a.name)) || (b.countryShare - a.countryShare) || (b.uniq - a.uniq))[0] || null;
+  const varCol = P.find(p => p !== timeCol && p !== unitCol && DS_VAR_HINT.test(p.name) && p.numShare < 0.5) || null;
+  const valCol = varCol ? (P.find(p => DS_VAL_HINT.test(p.name) && p.numShare >= 0.8) || valueCols.find(p => p !== unitCol) || null) : null;
+  if (timeCol) {
+    reasons.push(`"${timeCol.name}" holds ${timeCol.freq || "time"} values in ${Math.round(timeCol.timeShare * 100)}% of rows.`);
+    const nT = timeCol.uniq;
+    // wide by unit: time column plus columns named after countries/units
+    const unitNamedCols = valueCols.filter(p => DS_COUNTRY_SET.has(p.name.trim().toLowerCase()));
+    if (!unitCol && unitNamedCols.length >= 3 && unitNamedCols.length >= valueCols.length * 0.6) {
+      reasons.push(`${unitNamedCols.length} value columns are named after countries, so the table is wide by unit.`);
+      return { layout: "wideUnit", timeCol: timeCol.name, unitCols: unitNamedCols.map(p => p.name), varName: "value", type: "panel", freq: timeCol.freq, reasons, profile: P };
+    }
+    if (unitCol) {
+      const nU = unitCol.uniq; const ti = headers.indexOf(timeCol.name), ui = headers.indexOf(unitCol.name);
+      const pairs = new Set(rows.map(r => `${r[ui]}|${r[ti]}`)); const dup = rows.length - pairs.size;
+      reasons.push(`"${unitCol.name}" identifies ${nU} unit${nU === 1 ? "" : "s"}${unitCol.countryShare > 0.5 ? " (mostly country names or codes)" : ""}.`);
+      if (varCol) reasons.push(`"${varCol.name}" and "${valCol?.name}" hold variable names and values (long format).`);
+      let type = nU > 1 && nT > 1 ? "panel" : nU > 1 ? "cross" : "timeseries";
+      if (dup > 0 && !varCol) reasons.push(`${dup} unit-period combination${dup === 1 ? " appears" : "s appear"} more than once.`);
+      return { layout: varCol ? "longlong" : "long", timeCol: timeCol.name, unitCol: unitCol.name, varCol: varCol?.name || "", valCol: valCol?.name || "", type, freq: timeCol.freq, reasons, profile: P };
+    }
+    const repeats = N - nT;
+    if (repeats > N * 0.2) { reasons.push(`Time values repeat (${N} rows, ${nT} distinct periods) and no unit column was found: repeated cross-sections (each row is a different unit).`);
+      return { layout: "long", timeCol: timeCol.name, unitCol: "", rowUnits: true, type: "pooled", freq: timeCol.freq, reasons, profile: P }; }
+    reasons.push("No unit column, one row per period: a single time series.");
+    return { layout: "long", timeCol: timeCol.name, unitCol: "", type: "timeseries", freq: timeCol.freq, reasons, profile: P };
+  }
+  reasons.push("No column or header looks like time, so each row is one unit observed once.");
+  // in a cross-section the identifier is unique on every row
+  const idCol = P.filter(p => p.uniq === N && p.n === N).sort((a, b) => (DS_UNIT_HINT.test(b.name) - DS_UNIT_HINT.test(a.name)) || (a.numShare - b.numShare))[0] || null;
+  if (idCol) reasons.push(`"${idCol.name}" is unique on every row, so it identifies the units.`); else reasons.push("No column is unique on every row, so rows are numbered as units.");
+  return { layout: "long", timeCol: "", unitCol: idCol?.name || "", type: "cross", reasons, profile: P };
+};
+
+// Convert any supported layout to tidy records {unit, t, tl, v, val}
+const dsToTidy = (headers, rows, spec) => {
+  const ix = Object.fromEntries(headers.map((h, i) => [h, i])); const out = []; const tLab = {};
+  const T = (raw) => { const p = dsParseTime(raw); if (p) { tLab[p.t] = p.label; return p.t; } const s = String(raw ?? "").trim(); return s ? s : null; };
+  const val = (raw) => { const n = dsNum(raw); return n != null ? n : (String(raw ?? "").trim() || null); };
+  const unitOf = (r) => spec.unitCol ? String(r[ix[spec.unitCol]] ?? "").trim() : (spec.singleUnit || "All");
+  if (spec.layout === "wideTime") {
+    const tcols = spec.timeCols.map(c => ({ c, t: T(c) }));
+    rows.forEach(r => { const u = unitOf(r); if (!u) return; const v = spec.varCol ? String(r[ix[spec.varCol]] ?? "").trim() || "value" : (spec.varName || "value");
+      tcols.forEach(({ c, t }) => out.push({ unit: u, t, v, val: val(r[ix[c]]) })); });
+  } else if (spec.layout === "wideUnit") {
+    rows.forEach(r => { const t = T(r[ix[spec.timeCol]]); if (t == null) return; spec.unitCols.forEach(c => out.push({ unit: c, t, v: spec.varName || "value", val: val(r[ix[c]]) })); });
+  } else if (spec.layout === "longlong") {
+    rows.forEach(r => { const u = unitOf(r); const t = spec.timeCol ? T(r[ix[spec.timeCol]]) : "—"; const v = String(r[ix[spec.varCol]] ?? "").trim(); if (!u || t == null || !v) return; out.push({ unit: u, t, v, val: val(r[ix[spec.valCol]]) }); });
+  } else {
+    const skip = new Set([spec.unitCol, spec.timeCol].filter(Boolean)); const vcols = headers.filter(h => !skip.has(h));
+    rows.forEach((r, i) => { const u = spec.unitCol ? unitOf(r) : (spec.timeCol && !spec.rowUnits ? (spec.singleUnit || "All") : `row ${i + 1}`); const t = spec.timeCol ? T(r[ix[spec.timeCol]]) : "—"; if (!u || t == null) return;
+      vcols.forEach(c => out.push({ unit: u, t, v: c, val: val(r[ix[c]]) })); });
+  }
+  Object.keys(tLab).forEach(k => tLab[k] = tLab[k]);
+  return dsSummarize(out, tLab);
+};
+// Tidy from EcoScope basket panels: panels = [{name, data:{ISO2:{year:value}}}]
+const dsFromPanels = (panels, codes, y0, y1) => {
+  const out = []; const tLab = {};
+  codes.forEach(c => { const nm = COUNTRIES.find(x => x.code === c)?.name || c;
+    for (let y = y0; y <= y1; y++) { tLab[y] = String(y); panels.forEach(p => out.push({ unit: nm, t: y, v: p.name, val: p.data?.[c]?.[y] ?? null })); } });
+  return dsSummarize(out, tLab);
+};
+const dsSummarize = (recs, tLab) => {
+  const units = [...new Set(recs.map(r => r.unit))]; const times = [...new Set(recs.map(r => r.t))].sort((a, b) => (typeof a === "number" && typeof b === "number") ? a - b : String(a).localeCompare(String(b)));
+  const vars = [...new Set(recs.map(r => r.v))]; const keyCount = {}; recs.forEach(r => { const k = `${r.unit}|${r.t}|${r.v}`; keyCount[k] = (keyCount[k] || 0) + 1; });
+  const dups = Object.values(keyCount).filter(c => c > 1).length; const present = new Set(recs.filter(r => r.val != null).map(r => `${r.unit}|${r.t}`));
+  const perUnit = {}; recs.forEach(r => { if (r.val != null) (perUnit[r.unit] || (perUnit[r.unit] = new Set())).add(r.t); });
+  const balanced = units.every(u => (perUnit[u]?.size || 0) === times.length);
+  const missing = recs.filter(r => r.val == null).length;
+  return { recs, units, times, vars, tLab, dups, balanced, missing, cells: present.size };
+};
+const dsTypeOf = (td) => td.units.length > 1 && td.times.length > 1 ? "panel" : td.units.length > 1 ? "cross" : "timeseries";
+const DS_TYPES = { cross: "Cross-section", timeseries: "Time series", panel: "Panel", pooled: "Pooled cross-sections" };
+
+// Aggregate duplicates and produce the target table {headers, rows}
+const dsReshape = (td, target, o = {}) => {
+  const agg = o.agg || "mean"; const tl = (t) => td.tLab[t] ?? String(t);
+  // cell map unit|t|v -> value
+  const acc = {}; td.recs.forEach(r => { if (o.units && !o.units.includes(r.unit)) return; const k = `${r.unit}\u0001${r.t}\u0001${r.v}`; const a = acc[k] || (acc[k] = { s: 0, n: 0, first: undefined, str: null });
+    if (r.val == null) return; if (typeof r.val === "number") { a.s += r.val; a.n++; if (a.first === undefined) a.first = r.val; } else if (a.str == null) a.str = r.val; });
+  const get = (u, t, v) => { const a = acc[`${u}\u0001${t}\u0001${v}`]; if (!a) return ""; if (a.n) return agg === "sum" ? a.s : agg === "first" ? a.first : a.s / a.n; return a.str ?? ""; };
+  let units = o.units || td.units; const times = td.times; const vars = o.vars || td.vars;
+  if (o.balancedOnly) { const full = units.filter(u => times.every(t => vars.some(v => get(u, t, v) !== ""))); units = full; }
+  const H = [], R = [];
+  if (target === "panelLong") { H.push("unit", "time", ...vars); units.forEach(u => times.forEach(t => { const vals = vars.map(v => get(u, t, v)); if (o.dropEmpty && vals.every(x => x === "")) return; R.push([u, tl(t), ...vals]); })); }
+  else if (target === "tidyLong") { H.push("unit", "time", "variable", "value"); units.forEach(u => times.forEach(t => vars.forEach(v => { const x = get(u, t, v); if (o.dropEmpty && x === "") return; R.push([u, tl(t), v, x]); }))); }
+  else if (target === "wideTime") { H.push("unit", ...(vars.length > 1 ? vars.flatMap(v => times.map(t => `${v}_${tl(t)}`)) : times.map(tl))); units.forEach(u => R.push([u, ...vars.flatMap(v => times.map(t => get(u, t, v)))])); }
+  else if (target === "wideUnit") { const v = o.variable || vars[0]; H.push("time", ...units); times.forEach(t => R.push([tl(t), ...units.map(u => get(u, t, v))])); }
+  else if (target === "cross") { const ts = times.filter(t => o.tFrom == null || (t >= o.tFrom && t <= o.tTo)); H.push("unit", ...vars.map(v => ts.length > 1 ? `${v} (avg ${tl(ts[0])}–${tl(ts[ts.length - 1])})` : v));
+    units.forEach(u => R.push([u, ...vars.map(v => { const xs = ts.map(t => get(u, t, v)).filter(x => typeof x === "number"); return xs.length ? ciMean(xs) : (ts.map(t => get(u, t, v)).find(x => x !== "") ?? ""); })])); }
+  else if (target === "series") { const u = o.unit; H.push("time", ...vars); times.forEach(t => R.push([tl(t), ...vars.map(v => { if (u && u !== "__avg__") return get(u, t, v); const xs = units.map(uu => get(uu, t, v)).filter(x => typeof x === "number"); return xs.length ? ciMean(xs) : ""; })])); }
+  return { headers: H, rows: R.map(r => r.map(x => typeof x === "number" ? (Number.isInteger(x) ? String(x) : String(+x.toPrecision(10))) : String(x ?? ""))) };
+};
+const DS_TARGETS = {
+  panelLong: { label: "Long panel", sub: "One row per unit and period, one column per variable. Standard for panel regressions and synthetic control." },
+  tidyLong: { label: "Long (tidy)", sub: "One row per unit, period and variable. Best for pivot tables, R tidyverse and Stata reshape." },
+  wideTime: { label: "Wide by period", sub: "One row per unit, one column per period (per variable)." },
+  wideUnit: { label: "Wide by unit", sub: "One row per period, one column per unit, for one variable. Matches the wide panel upload." },
+  cross: { label: "Cross-section", sub: "One row per unit: a single period or the average over a range." },
+  series: { label: "Time series", sub: "One row per period for one unit, or the average across units." },
+};
+
+function DataStructureTab({ isMobile, imported, basket = [], eco, years, defaultCountry, onSend, onChart }) {
+  const [src, setSrc] = useState(imported ? "import" : "eco"); const [table, setTable] = useState(null); const [fileErr, setFileErr] = useState("");
+  const [det, setDet] = useState(null); const [spec, setSpec] = useState(null); const [manual, setManual] = useState(false);
+  const [tidy, setTidy] = useState(null); const [target, setTarget] = useState("panelLong"); const [opt, setOpt] = useState({ agg: "mean", balancedOnly: false, dropEmpty: true, variable: "", unit: "__avg__", tFrom: null, tTo: null });
+  const ecoItems = useMemo(() => basket.map(it => ({ key: ciItemKey(it), name: it.label, item: it, ...ciResolveItem(it) })), [basket]);
+  const [eSel, setESel] = useState({ countries: defaultCountry ? [defaultCountry] : ["GH"], region: "All", y0: years?.[0] ?? 2000, y1: Math.min(years?.[1] ?? CURRENT_YEAR, CURRENT_YEAR - 1), applyEco: true, items: ecoItems.filter(x => x.route !== "none").map(x => x.key) });
+  const [busy, setBusy] = useState("");
+  const setO = (k, v) => setOpt(o => ({ ...o, [k]: v }));
+  const loadTable = (parsed, name) => { if (parsed.error) { setFileErr(parsed.error); return; } setFileErr(""); const d = dsDetect(parsed.headers, parsed.rows); setTable({ ...parsed, name }); setDet(d); setSpec(d); setManual(false); };
+  const onFile = (f) => { if (!f) return; const r = new FileReader(); r.onload = () => loadTable(ciParseCSV(String(r.result)), f.name); r.readAsText(f); };
+  // rebuild tidy data whenever the table or spec changes
+  useEffect(() => { if (src === "eco" || !table || !spec) return; try { setTidy(dsToTidy(table.headers, table.rows, spec)); } catch (e) { console.error(e); setTidy(null); } }, [table, spec, src]);
+  const fetchEco = async () => { const chosen = ecoItems.filter(x => eSel.items.includes(x.key) && x.route !== "none"); if (!chosen.length || !eSel.countries.length) return;
+    const ecoOpt = eSel.applyEco ? eco : null; const panels = [];
+    for (const x of chosen) { setBusy(`Downloading ${x.name}…`); panels.push({ name: x.name, data: await fetchItemPanel(x.item, eSel.countries, eSel.y0, eSel.y1, ecoOpt) || {} }); }
+    setBusy(""); const td = dsFromPanels(panels, eSel.countries, eSel.y0, eSel.y1); setTidy(td); setTable(null);
+    const ty = dsTypeOf(td); setDet({ type: ty, layout: "eco", reasons: [`${td.units.length} countr${td.units.length === 1 ? "y" : "ies"} × ${td.times.length} years × ${td.vars.length} variable${td.vars.length === 1 ? "" : "s"} from your EcoScope selection${eSel.applyEco ? ` (${ciEcoNote(eco)})` : ""}.`] });
+    setTarget(ty === "panel" ? "panelLong" : ty === "cross" ? "cross" : "series"); };
+  const type = tidy ? (det?.type === "pooled" ? "pooled" : (manual && spec?.forceType) ? spec.forceType : dsTypeOf(tidy)) : det?.type;
+  useEffect(() => { if (!tidy) return; setOpt(o => ({ ...o, variable: o.variable && tidy.vars.includes(o.variable) ? o.variable : tidy.vars[0], tFrom: typeof tidy.times[0] === "number" ? tidy.times[0] : null, tTo: typeof tidy.times[tidy.times.length - 1] === "number" ? tidy.times[tidy.times.length - 1] : null })); }, [tidy]);
+  const validTargets = type === "panel" ? ["panelLong", "tidyLong", "wideTime", "wideUnit", "cross", "series"] : type === "timeseries" ? ["series", "tidyLong", "wideTime"] : type === "pooled" ? ["tidyLong", "panelLong", "series", "cross"] : ["cross", "tidyLong"];
+  useEffect(() => { if (type && !validTargets.includes(target)) setTarget(validTargets[0]);
+  }, [type]);
+  const result = useMemo(() => { if (!tidy) return null; try { return dsReshape(tidy, target, { ...opt, unit: type === "timeseries" ? tidy.units[0] : opt.unit }); } catch (e) { console.error(e); return null; } }, [tidy, target, opt, type]);
+  const H = table?.headers || [];
+  const setRole = (k, v) => setSpec(s => ({ ...s, [k]: v }));
+  const applyManualType = (ty) => { setManual(true);
+    if (ty === "cross") setSpec(s => ({ ...s, forceType: "cross", layout: s.layout === "wideTime" || s.layout === "wideUnit" ? "long" : s.layout, timeCol: "" }));
+    else if (ty === "timeseries") setSpec(s => ({ ...s, forceType: "timeseries", unitCol: "", layout: s.layout === "longlong" ? "longlong" : s.layout === "wideTime" ? "wideTime" : "long", timeCol: s.timeCol || H.find(h => DS_TIME_HINT.test(h)) || "" }));
+    else setSpec(s => ({ ...s, forceType: "panel" })); };
+  const outName = `${(table?.name || "ecoscope_selection").replace(/\.[a-z]+$/i, "")}_${target}`;
+  const send = (where) => { if (!result) return; onSend && onSend(where, { headers: result.headers, rows: result.rows }, `${outName} (${DS_TARGETS[target].label})`, { unit: result.headers[0] === "unit" ? "unit" : "", time: result.headers.includes("time") ? "time" : "" }); };
+  const rowsShown = result ? result.rows.slice(0, 40) : [];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "330px minmax(0,1fr)", gap: 16, alignItems: "start" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <LabSec title="1. Data" sub="Your imported data, a new file, or your EcoScope selection.">
+          <div role="group" aria-label="Data source" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[["eco", "My selection"], ...(imported ? [["import", "EcoScope import"]] : []), ["file", "Upload CSV"]].map(([k, l]) => <button key={k} type="button" aria-pressed={src === k} onClick={() => { setSrc(k); setTidy(null); setDet(null); setTable(null); if (k === "import") loadTable({ headers: imported.headers, rows: imported.rows }, imported.name); if (k === "file") setTimeout(() => document.getElementById("ds-file")?.click(), 0); }} style={{ ...pill(src === k), flex: 1, padding: "7px 6px" }}>{l}</button>)}
+          </div>
+          <input id="ds-file" type="file" accept=".csv,.tsv,.txt" onChange={e => onFile(e.target.files?.[0])} style={{ display: "none" }} />
+          {fileErr && <div style={{ marginTop: 8 }}><LabNote tone="bad">{fileErr}</LabNote></div>}
+          {src === "file" && <div style={{ marginTop: 10 }}><label htmlFor="ds-file" style={{ ...pill(false), display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer", padding: "6px 10px" }}><Ico n="file" /> {table ? "Choose another file" : "Choose a CSV file"}</label></div>}
+          {table && <div style={{ fontSize: 12, color: C.mid, marginTop: 8 }}><b style={{ color: C.text }}>{table.name}</b> · {table.rows.length.toLocaleString()} rows · {H.length} columns</div>}
+          {src === "eco" && <div style={{ marginTop: 10 }}>
+            {!ecoItems.some(x => x.route !== "none") ? <LabNote tone="warn">Add World Bank–based, IMF or WHO variables to your basket first. FRED, market and imported series cannot be downloaded for many countries.</LabNote> : <>
+              <LabField group label="Variables" hint={`${eSel.items.length} selected`}><div style={{ border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px" }}>
+                {ecoItems.map(x => <Check key={x.key} checked={eSel.items.includes(x.key)} onChange={v => setESel(e => ({ ...e, items: v ? [...e.items, x.key] : e.items.filter(k => k !== x.key) }))} label={x.name} sub={x.route === "none" ? x.reason : null} />)}</div></LabField>
+              <LabField group label="Countries" hint={`${eSel.countries.length} selected`}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                  <select aria-label="Region" value={eSel.region} onChange={e => setESel(s => ({ ...s, region: e.target.value }))} style={{ ...sel, padding: "6px 8px", fontSize: 12 }}>{REGIONS.map(r => <option key={r} value={r}>{r === "All" ? "All regions" : r}</option>)}</select>
+                  <button type="button" onClick={() => setESel(s => ({ ...s, countries: [...new Set([...s.countries, ...COUNTRIES.filter(c => s.region === "All" || c.region === s.region).map(c => c.code)])] }))} style={{ ...pill(false), whiteSpace: "nowrap" }}>Add all</button>
+                  <button type="button" onClick={() => setESel(s => ({ ...s, countries: [] }))} style={{ ...pill(false) }}>Clear</button>
+                </div>
+                <div style={{ maxHeight: 140, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 6, padding: "4px 10px" }}>
+                  {COUNTRIES.filter(c => eSel.region === "All" || c.region === eSel.region).map(c => <Check key={c.code} checked={eSel.countries.includes(c.code)} onChange={v => setESel(s => ({ ...s, countries: v ? [...s.countries, c.code] : s.countries.filter(x => x !== c.code) }))} label={c.name} />)}
+                </div>
+              </LabField>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <LabField label="From"><select value={eSel.y0} onChange={e => setESel(s => ({ ...s, y0: +e.target.value }))} style={{ ...sel, padding: 8 }}>{YEARS.filter(y => y < eSel.y1).map(y => <option key={y}>{y}</option>)}</select></LabField>
+                <LabField label="To"><select value={eSel.y1} onChange={e => setESel(s => ({ ...s, y1: +e.target.value }))} style={{ ...sel, padding: 8 }}>{YEARS.filter(y => y > eSel.y0 && y <= CURRENT_YEAR).map(y => <option key={y}>{y}</option>)}</select></LabField>
+              </div>
+              <Check checked={eSel.applyEco} onChange={v => setESel(s => ({ ...s, applyEco: v }))} label="Apply my EcoScope transform & imputation" sub={ciEcoNote(eco)} />
+              <button type="button" onClick={fetchEco} disabled={!!busy || !eSel.items.length || !eSel.countries.length} style={{ ...btn(), width: "100%", marginTop: 8, opacity: busy ? 0.55 : 1 }}>{busy || "Load data"}</button>
+            </>}
+          </div>}
+        </LabSec>
+        {det && <LabSec title="2. Structure" sub={manual ? "Set manually" : "Detected automatically"} right={manual && src !== "eco" ? <button type="button" onClick={() => { setSpec(det); setManual(false); }} style={pill(false)}>Reset to auto</button> : null}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ background: C.gold, color: C.onGold, borderRadius: 4, padding: "2px 8px", fontSize: 12, fontWeight: 700 }}>{DS_TYPES[type] || "—"}</span>
+            {tidy && <span style={{ fontSize: 12, color: C.mid }}>{type === "panel" ? (tidy.balanced ? "balanced" : "unbalanced") : ""}{det.freq ? ` · ${det.freq}` : ""}</span>}
+          </div>
+          <ul style={{ margin: "0 0 10px 16px", padding: 0, fontSize: 12, color: C.mid, lineHeight: 1.55 }}>{(det.reasons || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
+          {src !== "eco" && <>
+            <LabField group label="Data type (manual override)">
+              <div style={{ display: "flex", gap: 6 }}>{[["cross", "Cross-section"], ["timeseries", "Time series"], ["panel", "Panel"]].map(([k, l]) => <button key={k} type="button" aria-pressed={type === k} onClick={() => applyManualType(k)} style={{ ...pill(type === k), flex: 1, padding: "6px 4px", fontSize: 11.5 }}>{l}</button>)}</div>
+            </LabField>
+            <LabField label="Layout of the file"><select value={spec.layout} onChange={e => { setManual(true); setRole("layout", e.target.value); }} style={sel}>
+              <option value="long">Long: one row per unit (and period)</option><option value="longlong">Long: unit, period, variable, value</option><option value="wideTime">Wide: periods as columns</option><option value="wideUnit">Wide: units as columns</option></select></LabField>
+            {spec.layout !== "wideUnit" && <LabField label="Unit column" hint={type === "timeseries" ? "optional" : ""}><select value={spec.unitCol || ""} onChange={e => { setManual(true); setRole("unitCol", e.target.value); }} style={sel}><option value="">(none: one unit)</option>{H.filter(h => !(spec.timeCols || []).includes(h)).map(h => <option key={h} value={h}>{h}</option>)}</select></LabField>}
+            {spec.layout !== "wideTime" && <LabField label="Time column" hint={type === "cross" ? "optional" : ""}><select value={spec.timeCol || ""} onChange={e => { setManual(true); setRole("timeCol", e.target.value); }} style={sel}><option value="">(none)</option>{H.map(h => <option key={h} value={h}>{h}</option>)}</select></LabField>}
+            {spec.layout === "longlong" && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <LabField label="Variable column"><select value={spec.varCol || ""} onChange={e => { setManual(true); setRole("varCol", e.target.value); }} style={sel}>{H.map(h => <option key={h} value={h}>{h}</option>)}</select></LabField>
+              <LabField label="Value column"><select value={spec.valCol || ""} onChange={e => { setManual(true); setRole("valCol", e.target.value); }} style={sel}>{H.map(h => <option key={h} value={h}>{h}</option>)}</select></LabField></div>}
+            {spec.layout === "wideTime" && <LabField label="Variable column" hint="optional"><select value={spec.varCol || ""} onChange={e => { setManual(true); setRole("varCol", e.target.value); }} style={sel}><option value="">(single variable)</option>{H.filter(h => !(spec.timeCols || []).includes(h)).map(h => <option key={h} value={h}>{h}</option>)}</select></LabField>}
+          </>}
+        </LabSec>}
+        {tidy && <LabSec title="3. Target structure">
+          <div role="radiogroup" aria-label="Target structure" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {validTargets.map(k => <button key={k} type="button" role="radio" aria-checked={target === k} onClick={() => setTarget(k)} style={{ textAlign: "left", padding: "8px 10px", borderRadius: 6, border: `1px solid ${target === k ? C.gold : C.border}`, background: target === k ? `${C.gold}14` : "transparent", cursor: "pointer" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: target === k ? C.gold : C.text }}>{DS_TARGETS[k].label}</div><div style={{ fontSize: 11, color: C.mid, lineHeight: 1.45 }}>{DS_TARGETS[k].sub}</div></button>)}
+          </div>
+          <div style={{ marginTop: 10 }}>
+            {target === "wideUnit" && <LabField label="Variable"><select value={opt.variable} onChange={e => setO("variable", e.target.value)} style={sel}>{tidy.vars.map(v => <option key={v} value={v}>{v}</option>)}</select></LabField>}
+            {target === "cross" && typeof tidy.times[0] === "number" && tidy.times.length > 1 && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <LabField label="From"><select value={opt.tFrom ?? ""} onChange={e => setO("tFrom", +e.target.value)} style={{ ...sel, padding: 8 }}>{tidy.times.map(t => <option key={t} value={t}>{tidy.tLab[t] ?? t}</option>)}</select></LabField>
+              <LabField label="To" hint="same = one period"><select value={opt.tTo ?? ""} onChange={e => setO("tTo", +e.target.value)} style={{ ...sel, padding: 8 }}>{tidy.times.filter(t => t >= opt.tFrom).map(t => <option key={t} value={t}>{tidy.tLab[t] ?? t}</option>)}</select></LabField></div>}
+            {target === "series" && tidy.units.length > 1 && <LabField label="Unit"><select value={opt.unit} onChange={e => setO("unit", e.target.value)} style={sel}><option value="__avg__">Average across units</option>{tidy.units.map(u => <option key={u} value={u}>{u}</option>)}</select></LabField>}
+            {tidy.dups > 0 && <LabField label={`Duplicates (${tidy.dups})`}><select value={opt.agg} onChange={e => setO("agg", e.target.value)} style={sel}><option value="mean">Average duplicates</option><option value="sum">Sum duplicates</option><option value="first">Keep first</option></select></LabField>}
+            {type === "panel" && ["panelLong", "tidyLong", "wideTime"].includes(target) && <Check checked={opt.balancedOnly} onChange={v => setO("balancedOnly", v)} label="Keep only units observed in every period" sub="Makes the panel balanced" />}
+            {["panelLong", "tidyLong"].includes(target) && <Check checked={opt.dropEmpty} onChange={v => setO("dropEmpty", v)} label="Drop rows with no values" />}
+          </div>
+        </LabSec>}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+        {!tidy && !busy && <LabSec title="Data structuring" sub="Know your data's shape before you analyse it.">
+          <div style={{ fontSize: 13, color: C.mid, lineHeight: 1.7 }}>EcoScope reads the table and decides whether it is a <b>cross-section</b> (many units, one period), a <b>time series</b> (one unit, many periods) or a <b>panel</b> (many units over many periods). It explains why, and you can override it. Then pick the layout you need (long, wide, cross-section or a single series), check the preview, and download it or send it to Matching or Synthetic control.</div>
+        </LabSec>}
+        {busy && <LabSec title="Loading…"><div style={{ fontSize: 12, color: C.mid }}>{busy}</div></LabSec>}
+        {tidy && <>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2,minmax(0,1fr))" : "repeat(5,minmax(0,1fr))", gap: 10 }}>
+            {[["Type", DS_TYPES[type] || "—"], ["Units", tidy.units.length.toLocaleString()], ["Periods", tidy.times.length.toLocaleString()], ["Variables", tidy.vars.length.toLocaleString()], ["Missing cells", `${Math.round(100 * tidy.missing / Math.max(1, tidy.recs.length))}%`]].map(([l, v]) =>
+              <div key={l} style={{ ...card, padding: "10px 12px" }}><div style={{ fontSize: 11, color: C.mid, textTransform: "uppercase", letterSpacing: "0.06em" }}>{l}</div><div style={{ fontSize: 17, fontWeight: 600, color: C.text, marginTop: 2 }}>{v}</div></div>)}
+          </div>
+          {type === "panel" && !tidy.balanced && <LabNote tone="warn">The panel is unbalanced: some units are missing some periods. Synthetic control needs complete series; matching on period averages does not.</LabNote>}
+          {tidy.dups > 0 && <LabNote tone="warn">{tidy.dups} unit-period-variable combination{tidy.dups === 1 ? " appears" : "s appear"} more than once. They are {opt.agg === "mean" ? "averaged" : opt.agg === "sum" ? "summed" : "reduced to the first value"} in the output.</LabNote>}
+          {type === "pooled" && <LabNote>Pooled (repeated) cross-sections: different units in each period, so there is no unit column to follow over time. Use difference-in-means by period, or collapse to a cross-section.</LabNote>}
+          <LabSec title={`Preview: ${DS_TARGETS[target].label}`} sub={result ? `${result.rows.length.toLocaleString()} rows × ${result.headers.length} columns${result.rows.length > 40 ? " · first 40 rows shown" : ""}` : ""}
+            right={result && <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => dlCSV(result.rows.map(r => Object.fromEntries(result.headers.map((h, i) => [h, r[i]]))), `${outName}.csv`)} style={{ ...pill(false), display: "inline-flex", gap: 6, alignItems: "center" }}><Ico n="file" /> Download CSV</button>
+            </div>}>
+            {result && <div style={{ overflow: "auto", maxHeight: 380, border: `1px solid ${C.border}`, borderRadius: 6 }}>
+              <table style={{ borderCollapse: "collapse", minWidth: "100%" }}>
+                <thead><tr>{result.headers.map(h => <th key={h} scope="col" style={{ ...thS, textAlign: "left" }}>{h}</th>)}</tr></thead>
+                <tbody>{rowsShown.map((r, i) => <tr key={i}>{r.map((x, j) => { const idCol = ["unit", "time"].includes(result.headers[j]); const isNum = !idCol && dsNum(x) != null;
+                  return <td key={j} style={isNum ? tdN : tdS}>{x === "" ? <span style={{ color: C.dim }}>·</span> : isNum ? ciFmt(+x, Math.abs(+x) >= 1000 ? 0 : 2) : x}</td>; })}</tr>)}</tbody>
+              </table>
+            </div>}
+          </LabSec>
+          {result && <LabSec title="Use this data" sub="Send the structured table straight into an analysis.">
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => send("match")} disabled={!["cross", "panelLong", "tidyLong"].includes(target) || target === "tidyLong"} style={{ ...btn(), padding: "9px 14px", fontSize: 12, opacity: ["cross", "panelLong"].includes(target) ? 1 : 0.5 }}>Use in Matching</button>
+              <button type="button" onClick={() => send("synth")} disabled={!["panelLong", "wideUnit"].includes(target)} style={{ ...btn(), padding: "9px 14px", fontSize: 12, opacity: ["panelLong", "wideUnit"].includes(target) ? 1 : 0.5 }}>Use in Synthetic control</button>
+              {onChart && <button type="button" onClick={() => onChart({ headers: result.headers, rows: result.rows }, `${outName}.csv`)} disabled={!["series", "wideUnit"].includes(target)} style={{ ...pill(false), padding: "9px 14px", opacity: ["series", "wideUnit"].includes(target) ? 1 : 0.5 }}>Chart in EcoScope</button>}
+            </div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 8, lineHeight: 1.55 }}>Matching takes a cross-section or a long panel (one row per unit). Synthetic control takes a long panel or a wide-by-unit table. Charting takes a time series or a wide-by-unit table.</div>
+          </LabSec>}
+        </>}
+      </div>
+    </div>
+  );
+}
+
+function ImpactLab({ onClose, defaultCountry, defaultVar, imported, basket=[], eco, years, onChart }) {
+  const isMobile=useIsMobile(); const [tab,setTab]=useState("data"); const [incoming,setIncoming]=useState(null);
+  const handOff=(where, table, name)=>{ setIncoming({ where, table, name, id:Date.now() }); setTab(where); document.getElementById("impact-scroll")?.scrollTo({top:0}); };
   useEffect(()=>{ const k=(e)=>{ if(e.key==="Escape") onClose(); }; window.addEventListener("keydown",k); return ()=>window.removeEventListener("keydown",k); },[onClose]);
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="impact-title" style={{position:"fixed",inset:0,background:C.overlay,zIndex:400,display:"flex",alignItems:"stretch",justifyContent:"center",padding:isMobile?0:20}}>
@@ -3909,18 +4221,211 @@ function ImpactLab({ onClose, defaultCountry, defaultVar, imported, basket=[], e
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:isMobile?"12px 14px":"14px 20px",borderBottom:`1px solid ${C.border}`,background:C.surface,flexWrap:"wrap"}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:30,height:30,borderRadius:6,background:C.gold,color:C.onGold,display:"flex",alignItems:"center",justifyContent:"center"}}><Ico n="compare"/></div>
-            <div><h2 id="impact-title" style={{fontSize:16,margin:0,color:C.text}}>Policy Impact Lab</h2><div style={{fontSize:11,color:C.mid}}>Matching, weighting and synthetic control</div></div>
+            <div><h2 id="impact-title" style={{fontSize:16,margin:0,color:C.text}}>Policy Impact Lab</h2><div style={{fontSize:11,color:C.mid}}>Data structuring, matching, weighting and synthetic control</div></div>
           </div>
           <div role="tablist" aria-label="Impact Lab sections" style={{display:"flex",gap:6,order:isMobile?3:0,width:isMobile?"100%":"auto"}}>
-            {[["match","Matching"],["synth","Synthetic control"],["guide","Methods guide"]].map(([k,l])=><button key={k} role="tab" aria-selected={tab===k} type="button" onClick={()=>setTab(k)} style={{...pill(tab===k),padding:"7px 12px",flex:isMobile?1:"none"}}>{l}</button>)}
+            {[["data","Data structure"],["match","Matching"],["synth","Synthetic control"],["guide","Methods guide"]].map(([k,l])=><button key={k} role="tab" aria-selected={tab===k} type="button" onClick={()=>setTab(k)} style={{...pill(tab===k),padding:"7px 12px",flex:isMobile?1:"none"}}>{l}</button>)}
           </div>
           <button type="button" onClick={onClose} aria-label="Close Policy Impact Lab" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.mid,cursor:"pointer",padding:"6px 10px",fontSize:13}}>✕</button>
         </div>
         <div id="impact-scroll" style={{flex:1,overflowY:"auto",padding:isMobile?12:20}}>
-          <div style={{display:tab==="match"?"block":"none"}}><MatchingTab isMobile={isMobile} imported={imported} basket={basket} eco={eco} years={years} defaultCountry={defaultCountry}/></div>
-          <div style={{display:tab==="synth"?"block":"none"}}><SynthTab isMobile={isMobile} defaultCountry={defaultCountry} defaultVar={defaultVar} imported={imported} basket={basket} eco={eco} years={years}/></div>
+          <div style={{display:tab==="data"?"block":"none"}}><DataStructureTab isMobile={isMobile} imported={imported} basket={basket} eco={eco} years={years} defaultCountry={defaultCountry} onSend={handOff} onChart={onChart? (t,n)=>{ onChart(t,n); onClose(); } : null}/></div>
+          <div style={{display:tab==="match"?"block":"none"}}><MatchingTab isMobile={isMobile} imported={imported} basket={basket} eco={eco} years={years} defaultCountry={defaultCountry} incoming={incoming?.where==="match"? incoming : null}/></div>
+          <div style={{display:tab==="synth"?"block":"none"}}><SynthTab isMobile={isMobile} defaultCountry={defaultCountry} defaultVar={defaultVar} imported={imported} basket={basket} eco={eco} years={years} incoming={incoming?.where==="synth"? incoming : null}/></div>
           {tab==="guide"&&<MethodsGuide/>}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════
+// HELP ASSISTANT + SUPPORT CHAT
+// ══════════════════════════════════════════════
+// Built-in knowledge base. The assistant first asks the server (AI answer grounded in this guide);
+// if that is unavailable it answers from these entries by keyword match.
+const SUPPORT_FAQ = [
+  { q: "Why is my chart empty?", k: "empty chart blank no data nothing shows missing", a: "The source has no data for that country, variable or year range. Widen the years in the sidebar, pick another country, or try the World Bank version of the indicator. Recent years are often not published yet." },
+  { q: "Why won't a data source load?", k: "source not loading locked pro fred who imf error fail", a: "Sources marked with a lock need a Pro or Enterprise plan (Settings → Subscription). FRED needs an API key and covers the United States only. Some IMF series have no World Bank equivalent and return nothing. If a source still fails, send us the source and variable name from the Support tab." },
+  { q: "How do I compare countries?", k: "compare comparison two countries second country", a: "Tick Compare countries at the bottom of the left sidebar and choose a second country. Comparison is part of the Pro plan." },
+  { q: "How do I export data or charts?", k: "export download csv excel xls pdf png svg save", a: "Use the Export button above the chart: CSV (raw numbers, re-usable as a panel), Excel and PDF report. Snapshot saves the chart as PNG or SVG. Excel and PDF need a Pro plan." },
+  { q: "How do I add more variables to the chart?", k: "basket add variable multiple series several variables", a: "Click variables in the list on the left. Each one joins your basket (numbered badges) and is drawn as a separate series. Click again to remove it." },
+  { q: "How do transforms work?", k: "transform log growth percent change difference moving average zscore index", a: "Open the Transform tab under the variable list and pick log, first difference, % change, moving average, z-score, min-max or cumulative sum. The transform applies to every series in the basket and carries into the Impact Lab if you choose." },
+  { q: "How do I fill missing years?", k: "impute imputation missing gaps interpolate forward fill mean", a: "Use the Impute tab: linear interpolation, forward fill, backward fill or mean. Imputed values are treated as data, so causal estimates using them show a warning." },
+  { q: "How do I build a composite index?", k: "composite index weights normalize aggregate", a: "Open the Composite tab, choose min-max or z-score normalization and a weighted sum, geometric mean or equal-weight average. Set weights per variable." },
+  { q: "How do I import my own data?", k: "import upload csv my own data file", a: "Click Import your data at the top of the sidebar. The first column should be time (year, date or quarter); other columns are variables. Imported tables can also be used in the Impact Lab and the Data Structuring tool." },
+  { q: "What is the causal DAG tool?", k: "dag causal graph confounder mediator collider backdoor granger discover", a: "In the Dag tab you draw arrows between basket variables, mark the treatment X and outcome Y, and EcoScope lists confounders to control for and mediators or colliders to leave out. Auto-discover proposes edges from correlations and one-year lags; treat it as a starting point, not proof of causation." },
+  { q: "What is the Policy Impact Lab?", k: "impact lab policy effect causal matching synthetic control treatment", a: "Click Impact Lab in the chart toolbar. Matching estimates the effect of a 0/1 treatment on unit-level data (people, firms or countries). Synthetic control estimates the effect of a policy on one country or region by building a weighted twin from untreated donors." },
+  { q: "Which matching method should I use?", k: "matching nearest neighbour propensity score ipw aipw cem method which choose", a: "Run them side by side, which is the default. If the estimates agree and balance is good (max |SMD| under 0.1), the result is not driven by one model. Nearest-neighbour with bias correction is a good main specification; IPW and AIPW use all units; CEM is transparent but drops units." },
+  { q: "What do ATT, ATE and ATC mean?", k: "att ate atc estimand average treatment effect treated controls", a: "ATT is the average effect on units that were treated. ATE is the average effect across everyone. ATC is the effect if the untreated were treated. 'Feasible ATT' means some treated units had no acceptable match and were dropped." },
+  { q: "How do I read the synthetic control results?", k: "synthetic control rmspe placebo p-value donor weights gap", a: "Good pre-policy fit (small RMSPE) is essential. The average post-policy gap is the estimated effect. The placebo p-value ranks your country's post/pre RMSPE ratio among all donors; small values mean the effect is unusual compared with placebos." },
+  { q: "What is data structuring?", k: "structure cross section time series panel long wide reshape pivot detect", a: "Impact Lab → Data structure detects whether a table is cross-sectional, time series or panel, lets you override it, and reshapes it to long, wide or other layouts. You can download the result or send it straight to Matching or Synthetic control." },
+  { q: "How do I change my password?", k: "password change reset forgot security", a: "Settings → Password & security. Enter your current password and a new one twice. If you forgot your password, sign out and use Forgot password on the sign-in screen, or message support." },
+  { q: "How do I change the theme?", k: "theme dark light appearance colour color", a: "Settings → Appearance. Choose Graphite, Paper, Navy, Ledger or Terminal and press Save changes." },
+  { q: "How do I upgrade my plan?", k: "upgrade plan pro enterprise billing subscription price", a: "Settings → Subscription → Request an upgrade, or Request plan upgrade in the account menu. An administrator reviews the request." },
+  { q: "What are AI insights?", k: "ai insight claude anthropic narrative deep analysis", a: "Analyze Data gives a free built-in statistical summary. Deep Analysis sends the computed statistics to Claude for a written interpretation and needs a Pro plan." },
+  { q: "Why are some years marked as interpolated?", k: "quarterly monthly frequency interpolated annual", a: "Most sources publish annual data. When you switch to quarterly or monthly, EcoScope interpolates between annual values and labels them as estimates." },
+];
+const ciTok = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9%\s]/g, " ").split(/\s+/).filter(w => w.length > 2 && !["the", "and", "how", "what", "why", "can", "does", "with", "for", "you", "your", "are", "this", "that", "into", "from", "have", "use", "using"].includes(w)).map(w => w.replace(/(ing|ed|es|s)$/, ""));
+const ciKbAnswer = (question) => {
+  const qt = ciTok(question); if (!qt.length) return null;
+  const scored = SUPPORT_FAQ.map(f => { const kt = new Set([...ciTok(f.k), ...ciTok(f.q)]); let sc = 0; qt.forEach(w => { if (kt.has(w)) sc += 1; else if ([...kt].some(k => k.startsWith(w) || w.startsWith(k))) sc += 0.5; }); return { f, sc }; }).sort((a, b) => b.sc - a.sc);
+  if (scored[0].sc < 1) return null;
+  return { answer: scored[0].f.a, title: scored[0].f.q, related: scored.slice(1, 3).filter(x => x.sc >= 1).map(x => x.f.q) };
+};
+const ciFmtTime = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); };
+const ciFmtDay = (iso) => { const d = new Date(iso); if (isNaN(d)) return ""; const t = new Date(); const y = new Date(); y.setDate(t.getDate() - 1);
+  if (d.toDateString() === t.toDateString()) return "Today"; if (d.toDateString() === y.toDateString()) return "Yesterday";
+  return d.toLocaleDateString([], { weekday: "short", year: "numeric", month: "short", day: "numeric" }); };
+const SUPPORT_CATS = [["question", "Question"], ["bug", "Bug"], ["data", "Data issue"], ["feature", "Feature request"], ["billing", "Billing"], ["other", "Other"]];
+
+// Message list with day separators and timestamps
+const ChatLog = ({ msgs, me = "user", emptyText }) => {
+  const endRef = useRef(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs.length]);
+  if (!msgs.length) return <div style={{ padding: 20, color: C.dim, fontSize: 12, textAlign: "center", lineHeight: 1.6 }}>{emptyText}</div>;
+  let lastDay = "";
+  return (
+    <div role="log" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 12px 4px" }}>
+      {msgs.map((m, i) => { const day = ciFmtDay(m.created_at); const showDay = day !== lastDay; lastDay = day; const mine = m.sender === me;
+        const col = m.sender === "bot" ? C.purple : m.sender === "admin" ? C.teal : C.gold;
+        return <React.Fragment key={m.id || i}>
+          {showDay && <div style={{ textAlign: "center", fontSize: 11, color: C.dim, margin: "6px 0" }}>{day}</div>}
+          <div style={{ alignSelf: mine ? "flex-end" : "flex-start", maxWidth: "86%" }}>
+            <div style={{ fontSize: 10.5, color: C.dim, marginBottom: 2, textAlign: mine ? "right" : "left" }}>
+              {m.sender === "bot" ? "Assistant" : m.sender === "admin" ? "EcoScope support" : (m.username || "You")}{m.category ? ` · ${SUPPORT_CATS.find(c => c[0] === m.category)?.[1] || m.category}` : ""} · {ciFmtTime(m.created_at)}
+            </div>
+            <div style={{ background: mine ? `${col}22` : C.card, border: `1px solid ${mine ? col + "55" : C.border}`, borderRadius: 8, padding: "8px 11px", color: C.text, fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{m.body}</div>
+            {m.related?.length > 0 && <div style={{ fontSize: 11, color: C.mid, marginTop: 4 }}>Related: {m.related.join(" · ")}</div>}
+          </div>
+        </React.Fragment>; })}
+      <div ref={endRef} />
+    </div>
+  );
+};
+
+function SupportChat({ user, open, setOpen, mode, setMode }) {
+  const isMobile = useIsMobile();
+  const [aMsgs, setAMsgs] = useState([]); const [sMsgs, setSMsgs] = useState([]); const [text, setText] = useState(""); const [cat, setCat] = useState("question");
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [unread, setUnread] = useState(0);
+  const inputRef = useRef(null);
+  const loadThread = useCallback(async () => { const r = await US.supportMessages(user.username); if (Array.isArray(r)) { setSMsgs(r.filter(m => m.channel !== "assistant")); setUnread(r.filter(m => m.sender === "admin" && !m.read_by_user).length); } }, [user.username]);
+  useEffect(() => { loadThread(); const t = setInterval(loadThread, open && mode === "support" ? 8000 : 30000); return () => clearInterval(t); }, [loadThread, open, mode]);
+  useEffect(() => { if (open && mode === "support" && unread) { US.supportMarkRead(user.username, "user").then(loadThread); } }, [open, mode, unread, user.username, loadThread]);
+  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 50); }, [open, mode]);
+  const now = () => new Date().toISOString();
+  const send = async (e) => { e?.preventDefault(); const body = text.trim(); if (!body || busy) return; setErr(""); setText("");
+    if (mode === "assistant") {
+      const q = { sender: "user", body, created_at: now(), username: "You" }; setAMsgs(m => [...m, q]); setBusy(true);
+      let ans = await US.supportAssistant(body, aMsgs.slice(-8).map(m => ({ role: m.sender === "bot" ? "assistant" : "user", content: m.body })));
+      if (!ans?.answer) { const kb = ciKbAnswer(body); ans = kb ? { answer: kb.answer, related: kb.related } : { answer: "I don't have a good answer for that. Use “Send to support” below and the EcoScope team will reply here." }; }
+      setAMsgs(m => [...m, { sender: "bot", body: ans.answer, related: ans.related, created_at: now() }]); setBusy(false);
+      US.supportSend({ username: user.username, email: user.email, sender: "user", channel: "assistant", body }).catch(() => {});
+      US.supportSend({ username: user.username, email: user.email, sender: "bot", channel: "assistant", body: ans.answer }).catch(() => {});
+    } else {
+      setBusy(true); const r = await US.supportSend({ username: user.username, email: user.email, sender: "user", channel: "support", category: cat, body }); setBusy(false);
+      if (r?.error) { setErr(r.error); setText(body); } else loadThread();
+    } };
+  const escalate = () => { const lastQ = [...aMsgs].reverse().find(m => m.sender === "user"); setMode("support"); if (lastQ) setText(lastQ.body); };
+  const W = isMobile ? "100vw" : 390, H = isMobile ? "100dvh" : 580;
+  return (
+    <>
+      {!open && <button type="button" onClick={() => setOpen(true)} aria-label={`Help and support${unread ? `, ${unread} new repl${unread > 1 ? "ies" : "y"}` : ""}`}
+        style={{ position: "fixed", right: 18, bottom: 18, zIndex: 350, height: 46, padding: "0 16px 0 14px", borderRadius: 23, border: "none", background: C.gold, color: C.onGold, display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: C.shadow }}>
+        <Ico n="message" s={18} /> {!isMobile && "Help"}
+        {unread > 0 && <span style={{ background: C.red, color: "#fff", borderRadius: 10, minWidth: 20, height: 20, fontSize: 11, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>{unread}</span>}
+      </button>}
+      {open && <div role="dialog" aria-label="Help and support" style={{ position: "fixed", right: isMobile ? 0 : 18, bottom: isMobile ? 0 : 18, width: W, height: H, maxHeight: isMobile ? "100dvh" : "calc(100vh - 36px)", zIndex: 360, background: C.surface, border: `1px solid ${C.borderHi}`, borderRadius: isMobile ? 0 : 12, boxShadow: C.shadow, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ width: 30, height: 30, borderRadius: 6, background: C.gold, color: C.onGold, display: "flex", alignItems: "center", justifyContent: "center" }}><Ico n={mode === "assistant" ? "sparkle" : "message"} s={16} /></div>
+          <div style={{ flex: 1 }}><div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{mode === "assistant" ? "EcoScope assistant" : "EcoScope support"}</div>
+            <div style={{ fontSize: 11, color: C.mid }}>{mode === "assistant" ? "Answers about features and methods" : "Messages go to the EcoScope team"}</div></div>
+          <button type="button" onClick={() => setOpen(false)} aria-label="Close help" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, width: 30, height: 30, color: C.mid, cursor: "pointer" }}>✕</button>
+        </div>
+        <div role="tablist" aria-label="Help mode" style={{ display: "flex", gap: 6, padding: "8px 12px", borderBottom: `1px solid ${C.border}` }}>
+          {[["assistant", "Assistant"], ["support", `Support${unread ? ` (${unread})` : ""}`]].map(([k, l]) => <button key={k} role="tab" type="button" aria-selected={mode === k} onClick={() => setMode(k)} style={{ ...pill(mode === k), flex: 1, padding: "6px" }}>{l}</button>)}
+        </div>
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {mode === "assistant"
+            ? <>
+                <ChatLog msgs={aMsgs} emptyText="Ask how any feature works, for example “How do I compare two countries?” or “What does ATT mean?”" />
+                {!aMsgs.length && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 12px" }}>{SUPPORT_FAQ.slice(0, 5).map(f => <button key={f.q} type="button" onClick={() => setText(f.q)} style={{ ...pill(false), fontSize: 11.5 }}>{f.q}</button>)}</div>}
+                {busy && <div style={{ padding: "0 14px 10px", fontSize: 12, color: C.mid }}>Assistant is typing…</div>}
+              </>
+            : <ChatLog msgs={sMsgs} emptyText="Describe a problem, a data issue or a request. The team's replies will appear here, and you can come back to this conversation any time." />}
+        </div>
+        {mode === "assistant" && aMsgs.length > 0 && <div style={{ padding: "6px 12px", borderTop: `1px solid ${C.border}`, fontSize: 12, color: C.mid }}>Still stuck? <button type="button" onClick={escalate} style={{ background: "none", border: "none", color: C.blue, cursor: "pointer", padding: 0, fontSize: 12, textDecoration: "underline" }}>Send to support</button></div>}
+        {err && <div role="alert" style={{ padding: "6px 12px", color: C.red, fontSize: 12 }}>{err}</div>}
+        <form onSubmit={send} style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
+          {mode === "support" && <div role="group" aria-label="Topic" style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>{SUPPORT_CATS.map(([k, l]) => <button key={k} type="button" aria-pressed={cat === k} onClick={() => setCat(k)} style={{ ...pill(cat === k), fontSize: 11, padding: "3px 8px" }}>{l}</button>)}</div>}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <textarea ref={inputRef} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} rows={2} aria-label={mode === "assistant" ? "Ask the assistant" : "Message to support"}
+              placeholder={mode === "assistant" ? "Ask a question…" : "Write your message…"} style={{ ...inp, fontSize: 13, resize: "none", lineHeight: 1.45 }} />
+            <button type="submit" disabled={!text.trim() || busy} aria-label="Send" style={{ ...btn(), padding: "9px 14px", opacity: !text.trim() || busy ? 0.5 : 1 }}><Ico n="arrowup" s={16} /></button>
+          </div>
+        </form>
+      </div>}
+    </>
+  );
+}
+
+// Admin inbox: every conversation with dates and times, replies, status
+function AdminSupportInbox({ admin }) {
+  const isMobile = useIsMobile();
+  const [threads, setThreads] = useState([]); const [sel, setSel] = useState(null); const [msgs, setMsgs] = useState([]);
+  const [q, setQ] = useState(""); const [filter, setFilter] = useState("open"); const [showBot, setShowBot] = useState(false);
+  const [reply, setReply] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const loadThreads = useCallback(async () => { const r = await US.supportThreads(); if (Array.isArray(r)) setThreads(r); else if (r?.error) setErr(r.error); }, []);
+  const loadMsgs = useCallback(async (u) => { if (!u) return; const r = await US.supportMessages(u); if (Array.isArray(r)) setMsgs(r); }, []);
+  useEffect(() => { loadThreads(); const t = setInterval(loadThreads, 15000); return () => clearInterval(t); }, [loadThreads]);
+  useEffect(() => { if (!sel) return; loadMsgs(sel); US.supportMarkRead(sel, "admin").then(loadThreads); const t = setInterval(() => loadMsgs(sel), 8000); return () => clearInterval(t); }, [sel, loadMsgs, loadThreads]);
+  const shown = threads.filter(t => (filter === "all" || (t.status || "open") === filter) && (!q || `${t.username} ${t.email || ""} ${t.last_body || ""}`.toLowerCase().includes(q.toLowerCase())));
+  const cur = threads.find(t => t.username === sel);
+  const send = async (e) => { e.preventDefault(); const body = reply.trim(); if (!body) return; setBusy(true); setErr("");
+    const r = await US.supportSend({ username: sel, sender: "admin", channel: "support", body, admin: admin.username }); setBusy(false);
+    if (r?.error) setErr(r.error); else { setReply(""); loadMsgs(sel); loadThreads(); } };
+  const setStatus = async (st) => { await US.supportSetStatus(sel, st); loadThreads(); };
+  const exportThread = () => dlCSV(msgs.map(m => ({ date: new Date(m.created_at).toLocaleString(), from: m.sender === "admin" ? `support (${m.admin || "admin"})` : m.sender === "bot" ? "assistant" : m.username, channel: m.channel, category: m.category || "", message: m.body })), `support_${sel}.csv`);
+  const visible = msgs.filter(m => showBot || m.channel !== "assistant");
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0,1fr)" : "320px minmax(0,1fr)", gap: 14, minHeight: 520 }}>
+      <div style={{ ...card, padding: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <div style={{ padding: 12, borderBottom: `1px solid ${C.border}` }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search users or messages" aria-label="Search conversations" style={{ ...inp, fontSize: 12, marginBottom: 8 }} />
+          <div role="group" aria-label="Filter" style={{ display: "flex", gap: 6 }}>{[["open", "Open"], ["resolved", "Resolved"], ["all", "All"]].map(([k, l]) => <button key={k} type="button" aria-pressed={filter === k} onClick={() => setFilter(k)} style={{ ...pill(filter === k), flex: 1, padding: "5px" }}>{l}</button>)}</div>
+        </div>
+        <div style={{ overflowY: "auto", flex: 1, maxHeight: 560 }}>
+          {err && <div role="alert" style={{ padding: 12, color: C.red, fontSize: 12 }}>{err}</div>}
+          {!shown.length && <div style={{ padding: 16, fontSize: 12, color: C.dim }}>No conversations{filter !== "all" ? ` marked ${filter}` : ""}.</div>}
+          {shown.map(t => { const on = t.username === sel; return (
+            <button key={t.username} type="button" onClick={() => setSel(t.username)} aria-current={on ? "true" : undefined}
+              style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", border: "none", borderBottom: `1px solid ${C.border}`, background: on ? `${C.gold}14` : "transparent", cursor: "pointer" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: C.text, fontSize: 13, fontWeight: t.unread ? 700 : 500 }}>{t.username}</span>
+                <span style={{ color: C.dim, fontSize: 11, whiteSpace: "nowrap" }}>{ciFmtDay(t.last_at)} {ciFmtTime(t.last_at)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 2 }}>
+                <span style={{ color: C.mid, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.last_sender === "admin" ? "You: " : ""}{t.last_body}</span>
+                {t.unread > 0 && <span style={{ background: C.gold, color: C.onGold, borderRadius: 10, minWidth: 18, height: 18, fontSize: 11, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px", flexShrink: 0 }}>{t.unread}</span>}
+              </div>
+              <div style={{ fontSize: 10.5, color: (t.status || "open") === "open" ? C.orange : C.teal, marginTop: 3 }}>{(t.status || "open") === "open" ? "Open" : "Resolved"} · {t.count} message{t.count === 1 ? "" : "s"}</div>
+            </button>); })}
+        </div>
+      </div>
+      <div style={{ ...card, padding: 0, display: "flex", flexDirection: "column", minHeight: 520 }}>
+        {!sel ? <div style={{ margin: "auto", color: C.dim, fontSize: 13, padding: 20, textAlign: "center" }}>Select a conversation to read and reply.</div> : <>
+          <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 160 }}><div style={{ color: C.text, fontSize: 14, fontWeight: 600 }}>{sel}</div><div style={{ color: C.mid, fontSize: 12 }}>{cur?.email || "—"} · started {cur?.first_at ? `${ciFmtDay(cur.first_at)} ${ciFmtTime(cur.first_at)}` : "—"}</div></div>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12, color: C.mid }}><input type="checkbox" checked={showBot} onChange={e => setShowBot(e.target.checked)} style={{ accentColor: C.gold }} /> Show assistant chats</label>
+            {(cur?.status || "open") === "open" ? <button type="button" onClick={() => setStatus("resolved")} style={{ ...pill(false), color: C.teal }}>Mark resolved</button> : <button type="button" onClick={() => setStatus("open")} style={pill(false)}>Reopen</button>}
+            <button type="button" onClick={exportThread} style={{ ...pill(false), display: "inline-flex", gap: 6, alignItems: "center" }}><Ico n="file" /> Export</button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", maxHeight: 470 }}><ChatLog msgs={visible} me="admin" emptyText="No messages yet." /></div>
+          <form onSubmit={send} style={{ borderTop: `1px solid ${C.border}`, padding: 10, display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <textarea value={reply} onChange={e => setReply(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(e); }} rows={2} placeholder={`Reply to ${sel}… (Ctrl+Enter to send)`} aria-label="Reply" style={{ ...inp, fontSize: 13, resize: "vertical" }} />
+            <button type="submit" disabled={!reply.trim() || busy} style={{ ...btn(), padding: "9px 16px", opacity: !reply.trim() || busy ? 0.5 : 1 }}>{busy ? "Sending…" : "Send"}</button>
+          </form>
+        </>}
       </div>
     </div>
   );
@@ -3932,6 +4437,23 @@ function Dashboard({user, onLogout}) {
   const [showUserMenu,setShowUserMenu]=useState(false);
   const [upgradeModal,setUpgradeModal]=useState(null); // {feature, requiredPlan}
   const [showUpgradeReq,setShowUpgradeReq]=useState(false);
+  const [settingsTab,setSettingsTab]=useState("account");
+  // Load a {headers, rows} table into the dashboard as imported series (used by the CSV import and by Data structure)
+  const importTable=(parsed, name)=>{
+    const timeInfo=detectTimeColumn(parsed.headers,parsed.rows);
+    const series=csvToSeries(parsed.headers,parsed.rows,timeInfo.col);
+    if(Object.keys(series).length===0){alert("No numeric data columns found.");return false;}
+    setImportedData({series,freq:timeInfo.freq,timeName:timeInfo.name});
+    setImportedRaw({headers:parsed.headers, rows:parsed.rows, name});
+    setFreq(timeInfo.freq==="daily"?"monthly":timeInfo.freq);
+    const maxV=plan.aiInsights?10:4;
+    const cols=Object.keys(series).slice(0,maxV);
+    setVarBasket(cols.map((nm,i)=>({sourceId:"__imported__",varCode:nm,label:nm,fmt:"num",sourceColor:ACCENT[i%ACCENT.length],sourceName:"CSV"})));
+    return true;
+  };
+  const openSettings=(t="account")=>{ setSettingsTab(t); setShowSettings(true); setShowUserMenu(false); };
+  const [chatOpen,setChatOpen]=useState(false); const [chatMode,setChatMode]=useState("assistant");
+  const openSupport=(m="assistant")=>{ setChatMode(m); setChatOpen(true); setShowUserMenu(false); };
 
   // Sync plan from UserStore (admin may have changed it)
   const [liveUser,setLiveUser]=useState(user);
@@ -4772,11 +5294,14 @@ function Dashboard({user, onLogout}) {
                 </div>
                 {/* Menu items */}
                 {[
-                  {icon:<Ico n="settings"/>,label:"Settings",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
-                  {icon:<Ico n="chart"/>,label:"Data Sources",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
-                  
-                  {icon:<Ico n="arrowup"/>,label:"Request Plan Upgrade",action:()=>{setShowUpgradeReq(true);setShowUserMenu(false);}},
-                  {icon:<Ico n="help"/>,label:"Help & Support",action:()=>{setShowSettings(true);setShowUserMenu(false);}},
+                  {icon:<Ico n="user"/>,label:"Account",action:()=>openSettings("account")},
+                  {icon:<Ico n="lock"/>,label:"Password & security",action:()=>openSettings("security")},
+                  {icon:<Ico n="globe"/>,label:"Data sources",action:()=>openSettings("sources")},
+                  {icon:<Ico n="display"/>,label:"Appearance",action:()=>openSettings("theme")},
+                  {icon:<Ico n="settings"/>,label:"All settings",action:()=>openSettings("data")},
+                  null,
+                  {icon:<Ico n="arrowup"/>,label:"Request plan upgrade",action:()=>{setShowUpgradeReq(true);setShowUserMenu(false);}},
+                  {icon:<Ico n="message"/>,label:"Help & support chat",action:()=>openSupport("assistant")},
                   null,
                   {icon:"←",label:"Sign Out",action:onLogout,danger:true},
                 ].map((item,i)=> item===null
@@ -5783,10 +6308,12 @@ function Dashboard({user, onLogout}) {
         </main>
       </div>
 
-      {showSettings&&<Settings user={liveUser} settings={settings} onSave={ns=>{setSettings(ns);US.update(liveUser.username,{settings:ns}).catch(console.error);}} onClose={()=>setShowSettings(false)}/>}
+      {showSettings&&<Settings user={liveUser} settings={settings} initialTab={settingsTab} onRequestUpgrade={()=>setShowUpgradeReq(true)} onOpenSupport={openSupport}
+        onSave={ns=>{setSettings(ns);US.update(liveUser.username,{settings:ns}).catch(console.error);}} onClose={()=>setShowSettings(false)}/>}
+      <SupportChat user={liveUser} open={chatOpen} setOpen={setChatOpen} mode={chatMode} setMode={setChatMode}/>
       {/* DATA IMPORT MODAL */}
       {showImpact&&<ImpactLab onClose={()=>setShowImpact(false)} defaultCountry={country} defaultVar={varCode} imported={importedRaw}
-        basket={varBasket} eco={{ impute:appliedImpute, transform:appliedTransform }} years={[startYear,endYear]}/>}
+        basket={varBasket} eco={{ impute:appliedImpute, transform:appliedTransform }} years={[startYear,endYear]} onChart={importTable}/>}
       {showImport&&(
         <div style={{position:"fixed",inset:0,background:C.overlay,display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:16}}>
           <div style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:8,padding:"28px 32px",width:520,maxWidth:"100%",maxHeight:"85vh",overflowY:"auto",fontFamily:C.font}}>
@@ -5802,20 +6329,9 @@ function Dashboard({user, onLogout}) {
                 const file=e.target.files?.[0]; if(!file) return;
                 const reader=new FileReader();
                 reader.onload=(ev)=>{
-                  const text=ev.target.result;
-                  const parsed=parseCSV(text);
+                  const parsed=parseCSV(ev.target.result);
                   if(parsed.error){alert(parsed.error);return;}
-                  const timeInfo=detectTimeColumn(parsed.headers,parsed.rows);
-                  const series=csvToSeries(parsed.headers,parsed.rows,timeInfo.col);
-                  if(Object.keys(series).length===0){alert("No numeric data columns found.");return;}
-                  setImportedData({series,freq:timeInfo.freq,timeName:timeInfo.name});
-                  setImportedRaw({headers:parsed.headers, rows:parsed.rows, name:file.name});
-                  setFreq(timeInfo.freq==="daily"?"monthly":timeInfo.freq);
-                  // Auto-populate the basket with imported columns (up to max)
-                  const maxV=plan.aiInsights?10:4;
-                  const cols=Object.keys(series).slice(0,maxV);
-                  setVarBasket(cols.map((name,i)=>({sourceId:"__imported__",varCode:name,label:name,fmt:"num",sourceColor:ACCENT[i%ACCENT.length],sourceName:"CSV"})));
-                  setShowImport(false);
+                  if(importTable(parsed, file.name)) setShowImport(false);
                 };
                 reader.readAsText(file);
               }}/>
@@ -6055,6 +6571,9 @@ function AdminPanel({user, onLogout}) {
   const isMobile=useIsMobile();
   const [sidebarOpen,setSidebarOpen]=useState(false);
   const [tab,setTab]=useState("overview");
+  const [supportUnread,setSupportUnread]=useState(0);
+  useEffect(()=>{ let alive=true; const poll=async()=>{ const r=await US.supportThreads(); if(alive&&Array.isArray(r)) setSupportUnread(r.reduce((a,t)=>a+(t.unread||0),0)); };
+    poll(); const t=setInterval(poll,30000); return ()=>{ alive=false; clearInterval(t); }; },[]);
   const [showUserMenu,setShowUserMenu]=useState(false);
   const [sourceStatuses,setSourceStatuses]=useState([{name:'World Bank',short:'WB',url:'https://api.worldbank.org/v2/country/GH/indicator/NY.GDP.MKTP.CD?format=json',status:'live',latency:'—',uptime:'99.9%',color:C.blue},{name:'IMF DataMapper',short:'IMF',url:'https://www.imf.org/external/datamapper/api/v1/NGDP_RPCH/GHA',status:'live',latency:'—',uptime:'99.4%',color:C.teal},{name:'FRED',short:'FRED',url:null,status:'key-required',latency:'—',uptime:'99.8%',color:C.red},{name:'WHO GHO',short:'WHO',url:'https://ghoapi.azureedge.net/api/WHOSIS_000001?$top=1',status:'live',latency:'—',uptime:'98.7%',color:C.purple},{name:'Bank of Ghana',short:'BoG',url:null,status:'proxied',latency:'—',uptime:'99.9%',color:C.gold},{name:'BIS',short:'BIS',url:null,status:'proxied',latency:'—',uptime:'99.5%',color:C.cyan},{name:'UNCTAD',short:'UNCTAD',url:null,status:'proxied',latency:'—',uptime:'99.2%',color:C.orange},{name:'ILO',short:'ILO',url:null,status:'proxied',latency:'—',uptime:'99.1%',color:C.cyan},{name:'UNESCO',short:'UIS',url:null,status:'proxied',latency:'—',uptime:'98.9%',color:C.orange},{name:'UN Environment',short:'ENV',url:null,status:'proxied',latency:'—',uptime:'99.0%',color:C.teal}]);
   const [users,setUsers]=useState([]);
@@ -6146,6 +6665,7 @@ function AdminPanel({user, onLogout}) {
     {id:"subscriptions",icon:"⬡",label:"Subscriptions"},
     {id:"sources",icon:<Ico n="globe"/>,label:"Data Sources"},
     {id:"apikeys",icon:<Ico n="key"/>,label:"API Keys"},
+    {id:"support",icon:<Ico n="message"/>,label:"Support inbox",badge:supportUnread},
     {id:"activity",icon:<Ico n="clipboard"/>,label:"Activity Log"},
     {id:"config",icon:<Ico n="settings"/>,label:"System Config"},
   ];
@@ -6210,6 +6730,7 @@ function AdminPanel({user, onLogout}) {
                   {icon:<Ico n="settings"/>,label:"System Config",action:()=>{setTab("config");setShowUserMenu(false);}},
                   {icon:<Ico n="users"/>,label:"User Management",action:()=>{setTab("users");setShowUserMenu(false);}},
                   {icon:<Ico n="globe"/>,label:"Data Sources",action:()=>{setTab("sources");setShowUserMenu(false);}},
+                  {icon:<Ico n="message"/>,label:`Support inbox${supportUnread?` (${supportUnread})`:""}`,action:()=>{setTab("support");setShowUserMenu(false);}},
                   null,
                   {icon:"←",label:"Sign Out",action:onLogout,danger:true},
                 ].map((item,i)=>item===null
@@ -6476,6 +6997,12 @@ function AdminPanel({user, onLogout}) {
           )}
 
           {/* ── ACTIVITY ── */}
+          {tab==="support"&&(
+            <>
+              <div><h2 style={{margin:0,fontSize:16,fontWeight:700,color:C.text}}>Support inbox</h2><p style={{margin:"3px 0 0",color:C.mid,fontSize:12}}>Messages from users, with every conversation's history, dates and times. Replies appear in the user's help chat.</p></div>
+              <AdminSupportInbox admin={user}/>
+            </>
+          )}
           {tab==="activity"&&(
             <>
               <div><h2 style={{margin:0,fontSize:16,fontWeight:700,color:C.text}}><Ico n="clipboard"/> Activity Log</h2><p style={{margin:"3px 0 0",color:C.mid,fontSize:11,fontFamily:C.mono}}>All user actions — today</p></div>
