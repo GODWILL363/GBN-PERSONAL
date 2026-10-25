@@ -391,6 +391,12 @@ app.get("/api/health", (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+// PASSWORD CHANGE · SUPPORT CHAT · HELP ASSISTANT  (see support_routes.js)
+// Must stay above the React catch-all route below.
+// ════════════════════════════════════════════════════════════════════════════
+require("./support_routes")(app, { hashPassword: hashPw });
+
+// ════════════════════════════════════════════════════════════════════════════
 // SERVE REACT BUILD
 // ════════════════════════════════════════════════════════════════════════════
 const BUILD_DIR = path.join(__dirname, "build");
