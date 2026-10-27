@@ -5684,7 +5684,8 @@ function Dashboard({user, onLogout}) {
   const [endYear,setEndYear]=useState(CURRENT_YEAR);
 
   // Chart
-  const [chartType,setChartType]=useState("area");
+  const [chartType,setChartType]=useState(settings.chartType||"area");
+  useEffect(()=>{ if (settings.chartType) setChartType(settings.chartType); },[settings.chartType]);
   const [distVar,setDistVar]=useState(0);
   const [animate,setAnimate]=useState(false);
   const [animTick,setAnimTick]=useState(0);
@@ -6083,16 +6084,15 @@ function Dashboard({user, onLogout}) {
     }
 
     // Composite index mode
-    if(showComposite&&varBasket.length>=2){
+    if(showComposite&&varBasket.length>=2&&["area","line","bar"].includes(chartType)){
       const seriesList=allVarDefs.map(vd=>{const dk=dataKey?dataKey(vd):`${vd._sourceId||source.id}:${vd.code}`;return{name:vd.name.substring(0,18)+" ["+(vd._sourceName||source.short)+"]",data:applyTransform(imputeData(multiData[dk]||multiData[vd.code]||[],imputeMethod),transform)};});
       const compositeData=buildComposite(seriesList,compWeights.slice(0,varBasket.length),compNorm,compAgg);
       const chartD=compositeData.map(d=>({year:d.year,"Composite Index":d.value}));
       const ax={x:<XAxis dataKey="year" tick={{fill:T.mid,fontSize:11,fontFamily:C.mono}} axisLine={{stroke:T.border}} tickLine={false}/>,y:<YAxis tick={{fill:T.mid,fontSize:11,fontFamily:C.mono}} axisLine={false} tickLine={false} width={60}/>,g:<CartesianGrid stroke={T.border} strokeOpacity={0.8} vertical={false}/>,t:<Tooltip contentStyle={{background:C.surface,border:`1px solid ${C.borderHi}`,fontFamily:C.mono,fontSize:11}}/>,l:<Legend wrapperStyle={{color:T.mid,fontSize:11,fontFamily:C.mono}}/>};
-      return(
-        <ResponsiveContainer width="100%" height={280}>
-          <AreaChart data={chartD} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}<defs><linearGradient id="compGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.purple} stopOpacity={.3}/><stop offset="95%" stopColor={C.purple} stopOpacity={0}/></linearGradient></defs><Area dataKey="Composite Index" stroke={C.purple} fill="url(#compGrad)" strokeWidth={2.5} dot={false}/></AreaChart>
-        </ResponsiveContainer>
-      );
+      const anim={ isAnimationActive:animate, animationDuration:animate?1400:0 };
+      if (chartType==="bar") return(<BarChart data={chartD} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}<Bar dataKey="Composite Index" fill={C.purple} radius={[4,4,0,0]} {...anim}/></BarChart>);
+      if (chartType==="line") return(<LineChart data={chartD} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}<Line dataKey="Composite Index" stroke={C.purple} strokeWidth={2.5} dot={false} {...anim}/></LineChart>);
+      return(<AreaChart data={chartD} margin={{top:10,right:16,left:0,bottom:0}}>{ax.g}{ax.x}{ax.y}{ax.t}{ax.l}<defs><linearGradient id="compGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={C.purple} stopOpacity={.3}/><stop offset="95%" stopColor={C.purple} stopOpacity={0}/></linearGradient></defs><Area dataKey="Composite Index" stroke={C.purple} fill="url(#compGrad)" strokeWidth={2.5} dot={false} {...anim}/></AreaChart>);
     }
 
     // Standard multi-variable chart
@@ -7014,7 +7014,7 @@ function Dashboard({user, onLogout}) {
               </div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                 {[["area","◭"],["line","╱"],["bar","▮"],["stats","Σ"],["dist","∿"]].map(([t,ic])=>(
-                  <button key={t} onClick={()=>setChartType(t)} style={{...pill(chartType===t),textTransform:"capitalize",fontSize:11}}>
+                  <button key={t} type="button" aria-pressed={viewMode==="chart"&&chartType===t} onClick={()=>{ setChartType(t); setViewMode("chart"); }} style={{...pill(viewMode==="chart"&&chartType===t),textTransform:"capitalize",fontSize:11}}>
                     {ic} {t==="dist"?"distribution":t}
                   </button>
                 ))}
@@ -7027,7 +7027,7 @@ function Dashboard({user, onLogout}) {
                   </div>
                 )}
                 <div style={{width:1,height:16,background:C.border}}/>
-                <button onClick={()=>setViewMode(v=>v==="chart"?"table":"chart")} style={pill(false)}>
+                <button type="button" aria-pressed={viewMode==="table"} onClick={()=>setViewMode(v=>v==="chart"?"table":"chart")} style={pill(viewMode==="table")}>
                   {viewMode==="chart"?"⊞ Table":"◫ Chart"}
                 </button>
                 <button onClick={()=>setShowImpact(true)} style={{...pill(true),display:"inline-flex",alignItems:"center",gap:5}} title="Matching, weighting and synthetic control"><Ico n="compare"/> Impact Lab</button>
