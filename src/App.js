@@ -8895,6 +8895,15 @@ const vaultKindIcon = (k) => ({ pdf: "PDF", spreadsheet: "XLS", document: "DOC",
 const vaultWhen = (t) => { if (!t) return "—"; const d = new Date(t); return isNaN(d) ? "—" : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); };
 const VAULT_STATE = { live: ["Live", "teal", "Users on the chosen plans can see it"], draft: ["Draft", "dim", "Not published"], hidden: ["Hidden", "gold", "Published, but every category it is in is switched off"], no_audience: ["No audience", "gold", "Published, but no plan or user is chosen"] };
 
+// admin storage: load a stored table, or read a stored CSV / Excel file into tables
+const vaultStoreTables = async (it) => { const r = await fetch(`/api/admin/library-storage/${encodeURIComponent(it.id)}`); if (!r.ok) { let j = null; try { j = await r.json(); } catch (e) { j = null; } throw new Error((j && j.error) || `Could not open ${it.name}`); }
+  if (it.kind === "table") { const j = await r.json(); return [{ name: j.name, headers: j.table_data.headers, rows: j.table_data.rows.map(x => x.map(v => v == null ? "" : String(v))) }]; }
+  if (!/\.(csv|tsv|txt|xlsx|xlsm|xls|ods)$/i.test(it.name)) throw new Error(`${it.name} is not a table file. Download it, or pull its tables in the Workbench (Tables from PDF).`);
+  const X = await wbXlsx(); const wb = X.read(new Uint8Array(await r.arrayBuffer()), { type: "array" }); const base = it.name.replace(/\.[^.]+$/, ""); const out = [];
+  wb.SheetNames.forEach(sh => { const t = wbSheetTable(X, wb.Sheets[sh]); if (t) out.push({ name: wb.SheetNames.length > 1 ? `${base} – ${sh}` : base, ...t }); }); if (!out.length) throw new Error(`${it.name} has no table in it.`); return out; };
+const vaultIsTabular = (it) => it.kind === "table" || /\.(csv|tsv|txt|xlsx|xlsm|xls|ods)$/i.test(it.name);
+const vaultSaveTable = (t, folder, note) => vaultCall("POST", "/api/admin/library-storage/table", { name: t.name, folder, note, headers: t.headers, rows: t.rows });
+
 function VSwitch({ on, onChange, label, disabled, small }) {
   const w = small ? 30 : 38, h = small ? 17 : 21;
   return <button type="button" role="switch" aria-checked={!!on} aria-label={label} disabled={disabled} onClick={() => onChange(!on)} title={label}
@@ -8907,7 +8916,7 @@ const vaultAudience = (a) => { const p = (a?.plans || []).map(x => (VAULT_PLANS.
 // ── Administrator: the Data Vault tab ──
 function AdminVault({ users, notify }) {
   const [data, setData] = useState(null); const [err, setErr] = useState(""); const [editing, setEditing] = useState(null); const [q, setQ] = useState(""); const [cat, setCat] = useState("all");
-  const [name, setName] = useState(""); const [confirm, setConfirm] = useState(null); const [busy, setBusy] = useState("");
+  const [name, setName] = useState(""); const [confirm, setConfirm] = useState(null); const [busy, setBusy] = useState(""); const [view, setView] = useState("datasets"); const [preset, setPreset] = useState(null);
   const load = useCallback(async () => { try { const d = await vaultCall("GET", "/api/admin/library"); setData(d); setName(d.settings.name); setErr(""); } catch (e) { setErr(e.message); } }, []);
   useEffect(() => { load(); }, [load]);
   const saveSettings = async (patch, msg) => { setBusy("settings"); try { const s = await vaultCall("PATCH", "/api/admin/library-settings", patch); notify(msg); setData(d => d ? { ...d, settings: s } : d); await load(); } catch (e) { notify(e.message, "error"); } setBusy(""); };
@@ -8928,6 +8937,10 @@ function AdminVault({ users, notify }) {
       </div>
       <p style={{ ...wbNote, margin: "8px 0 0" }}>This section is separate from the Macro and Micro data sources. Prepare a dataset, attach the documents that back it, choose which plans or users may see it, then switch it to Published.</p>
     </div>
+    <div role="tablist" aria-label="Data Vault views" style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+      {[["datasets", `Datasets (${ds.length})`], ["storage", "Storage (admin only)"]].map(([v, l]) => <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} style={{ ...pill(view === v, C.gold), fontSize: 12.5, padding: "6px 14px" }}>{l}</button>)}</div>
+    {view === "storage" && <AdminStorage notify={notify} onPublish={(t) => { setPreset({ table: { headers: t.headers, rows: t.rows }, title: t.name }); setEditing("new"); }} />}
+    {view === "datasets" && <>
     <div style={card}>
       <h3 style={{ margin: "0 0 4px", fontSize: 14, color: C.text }}>Categories</h3>
       <p style={{ ...wbNote, margin: "0 0 10px" }}>Switch a category off to hide it from every user. A dataset stays visible while at least one of its categories is on.</p>
@@ -8958,19 +8971,28 @@ function AdminVault({ users, notify }) {
           <td style={{ padding: "8px", color: C.dim, whiteSpace: "nowrap" }}>{vaultWhen(d.updated_at)}</td>
           <td style={{ padding: "8px", whiteSpace: "nowrap" }}><button type="button" style={wbSmallBtn()} onClick={() => setEditing(d.id)}>Edit</button> <button type="button" style={wbSmallBtn(C.red)} aria-label={`Delete ${d.title}`} onClick={() => setConfirm(d)}>Delete</button></td></tr>; })}</tbody></table></div>}
     </div>
+    </>}
     {confirm && <div role="dialog" aria-modal="true" aria-label="Delete dataset" style={{ position: "fixed", inset: 0, background: C.overlay, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div style={{ ...card, maxWidth: 420, marginBottom: 0 }}><h3 style={{ marginTop: 0, fontSize: 15, color: C.text }}>Delete “{confirm.title}”?</h3><p style={wbNote}>Its data and {(confirm.files || []).length} document(s) are removed for everyone. This cannot be undone.</p>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}><button type="button" style={wbSmallBtn()} onClick={() => setConfirm(null)}>Cancel</button><button type="button" style={btn(C.red)} disabled={busy === confirm.id} onClick={() => remove(confirm)}>Delete</button></div></div></div>}
-    {editing && <VaultEditor id={editing === "new" ? null : editing} settings={S} users={users} notify={notify} onClose={() => setEditing(null)} onSaved={load} />}
+    {editing && <VaultEditor id={editing === "new" ? null : editing} initial={editing === "new" ? preset : null} settings={S} users={users} notify={notify} onClose={() => { setEditing(null); setPreset(null); }} onSaved={load} />}
   </div>;
 }
 
 // ── Administrator: prepare, describe, document, choose who sees it, publish ──
 const VAULT_BLANK = { title: "", description: "", categories: [], source_name: "", source_url: "", citation: "", license: "", coverage: "", notes: "", audience: { plans: ["pro", "enterprise"], users: [] }, allow_download: true, published: false };
-function VaultEditor({ id, settings, users, notify, onClose, onSaved }) {
+function VaultEditor({ id, initial, settings, users, notify, onClose, onSaved }) {
   const blank = VAULT_BLANK;
   const [d, setD] = useState(id ? null : blank); const [curId, setCurId] = useState(id); const [table, setTable] = useState(null); const [dirtyData, setDirtyData] = useState(false); const [files, setFiles] = useState([]);
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(""); const [wb, setWb] = useState(false); const [wbDs, setWbDs] = useState({}); const [wbF, setWbF] = useState({}); const [wbC, setWbC] = useState(null); const [wbO, setWbO] = useState(null);
+  const [store, setStore] = useState([]); const [spick, setSpick] = useState("");
+  useEffect(() => { vaultCall("GET", "/api/admin/library-storage").then(x => setStore(Array.isArray(x) ? x.filter(vaultIsTabular) : [])).catch(() => {}); }, []);
+  useEffect(() => { if (initial && initial.table) { setTable(initial.table); setDirtyData(true); setChanged(true); setD(x => x ? { ...x, title: x.title || initial.title || "" } : x); } }, [initial]);
+  const fromStore = async () => { const it = store.find(x => x.id === spick); if (!it) return; setBusy(`Opening ${it.name}…`); try { const ts = await vaultStoreTables(it); const now = new Date().toISOString(); const add = {};
+      ts.forEach(t => { const nid = prjUid(); add[nid] = { id: nid, name: t.name, headers: t.headers, rows: t.rows, created: now, updated: now, source: "storage" }; }); setWbDs(x => ({ ...x, ...add }));
+      if (ts.length === 1) { setTable({ headers: ts[0].headers, rows: ts[0].rows }); setDirtyData(true); setChanged(true); if (!d.title) set("title", ts[0].name); notify(`Using “${ts[0].name}” from storage`); }
+      else notify(`${ts.length} tables from ${it.name} are in the Workbench list; choose one.`); } catch (e) { setErr(e.message); } setBusy(""); };
+  const toStore = async () => { const x = wbDs[pick]; if (!x) return; setBusy(`Saving ${x.name} to storage…`); try { const m = await vaultSaveTable(x, "", "from the dataset editor"); setStore(s2 => [m, ...s2]); notify(`Saved “${x.name}” to storage`); } catch (e) { setErr(e.message); } setBusy(""); };
   const [pick, setPick] = useState(""); const [who, setWho] = useState(""); const [note, setNote] = useState(""); const fileRef = useRef(null); const [changed, setChanged] = useState(false);
   useEffect(() => { if (!id) return; let alive = true; (async () => { try { const x = await vaultCall("GET", `/api/admin/library/${id}`); if (!alive) return; const { headers, rows, files: fl, ...m } = x;
       setD({ ...VAULT_BLANK, ...m, audience: m.audience || VAULT_BLANK.audience }); setTable(headers && headers.length ? { headers, rows } : null); setFiles(fl || []); } catch (e) { setErr(e.message); } })(); return () => { alive = false; };
@@ -9010,8 +9032,13 @@ function VaultEditor({ id, settings, users, notify, onClose, onSaved }) {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
             <button type="button" style={btn(C.teal)} onClick={openWb}>{table ? "Edit or replace in Workbench" : "Prepare data in Workbench"}</button>
             {wbList.length > 0 && <><select aria-label="Workbench dataset to use" value={pick} onChange={e => setPick(e.target.value)} style={{ ...sel, width: "auto", padding: "6px 8px", fontSize: 12.5 }}><option value="">Choose a Workbench dataset…</option>{wbList.map(x => <option key={x.id} value={x.id}>{x.name} ({x.rows.length.toLocaleString()} rows)</option>)}</select>
-              <button type="button" style={wbSmallBtn()} disabled={!pick} onClick={() => takeWb(pick)}>Use this dataset</button></>}
-          </div></div>
+              <button type="button" style={wbSmallBtn()} disabled={!pick} onClick={() => takeWb(pick)}>Use this dataset</button>
+              <button type="button" style={wbSmallBtn()} disabled={!pick || !!busy} onClick={toStore} title="Keep this Workbench dataset in admin storage to finish later">Save to storage</button></>}
+          </div>
+          {store.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+            <select aria-label="Table from storage" value={spick} onChange={e => setSpick(e.target.value)} style={{ ...sel, width: "auto", padding: "6px 8px", fontSize: 12.5 }}><option value="">Or load from storage…</option>{store.map(x => <option key={x.id} value={x.id}>{x.folder ? `${x.folder} / ` : ""}{x.name}{x.n_rows != null ? ` (${x.n_rows.toLocaleString()} rows)` : ""}</option>)}</select>
+            <button type="button" style={wbSmallBtn()} disabled={!spick || !!busy} onClick={fromStore}>Load</button></div>}
+        </div>
         <div style={sec}>{h("2", "Details and source")}
           {lab("Title", <input value={d.title} maxLength={160} onChange={e => set("title", e.target.value)} style={inp} />)}
           {lab("Description", <textarea value={d.description || ""} rows={3} maxLength={4000} onChange={e => set("description", e.target.value)} style={{ ...inp, resize: "vertical", fontFamily: "inherit" }} />, "What the data covers and how it can be used.")}
@@ -9059,6 +9086,74 @@ function VaultEditor({ id, settings, users, notify, onClose, onSaved }) {
     </div>
     {wb && <Workbench startTab="datasets" onClose={() => setWb(false)} datasets={wbDs} setDatasets={setWbDs} formulas={wbF} setFormulas={setWbF} coding={wbC} setCoding={setWbC} optim={wbO} setOptim={setWbO}
       onChart={() => notify("Charts are made from the user dashboard. Here, choose the finished dataset with Use this dataset.")} onImpact={() => notify("The Impact Lab is on the user dashboard.")} basketTable={() => null} />}
+  </div>;
+}
+
+// ── Administrator: storage for raw files and work in progress (never shown to users) ──
+function AdminStorage({ notify, onPublish }) {
+  const [items, setItems] = useState(null); const [err, setErr] = useState(""); const [busy, setBusy] = useState(""); const [folder, setFolder] = useState(""); const [note, setNote] = useState(""); const [filt, setFilt] = useState("all"); const [q, setQ] = useState("");
+  const [wb, setWb] = useState(false); const [wbDs, setWbDs] = useState({}); const [wbF, setWbF] = useState({}); const [wbC, setWbC] = useState(null); const [wbO, setWbO] = useState(null); const [pick, setPick] = useState(""); const [confirm, setConfirm] = useState(null); const fileRef = useRef(null);
+  const load = useCallback(async () => { try { setItems(await vaultCall("GET", "/api/admin/library-storage")); setErr(""); } catch (e) { setErr(e.message); } }, []);
+  useEffect(() => { load(); }, [load]);
+  const upload = async (list) => { const fs = [...(list || [])]; for (const f of fs) { if (f.size > 15 * 1048576) { setErr(`${f.name} is ${vaultSize(f.size)}; files can be up to 15 MB. Open big CSV or Excel files in the Workbench and save the table instead.`); continue; }
+      setBusy(`Uploading ${f.name}…`); try { const q2 = `name=${encodeURIComponent(f.name)}&type=${encodeURIComponent(f.type || "")}&folder=${encodeURIComponent(folder)}&note=${encodeURIComponent(note)}`;
+        const r = await fetch(`/api/admin/library-storage/file?${q2}`, { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f }); let j = null; try { j = await r.json(); } catch (e) { j = null; } if (!r.ok) throw new Error((j && j.error) || `Upload failed (${r.status})`); }
+      catch (e) { setErr(`${f.name}: ${e.message}`); } } setBusy(""); if (fs.length) notify(`Saved ${fs.length} file${fs.length > 1 ? "s" : ""} to storage`); load(); };
+  const wbList = Object.values(wbDs).filter(x => x && Array.isArray(x.headers));
+  const saveWb = async () => { const x = wbDs[pick]; if (!x) return; setBusy(`Saving ${x.name}…`); try { await vaultSaveTable(x, folder, note); notify(`Saved “${x.name}” (${x.rows.length.toLocaleString()} rows) to storage`); load(); } catch (e) { setErr(e.message); } setBusy(""); };
+  const toWb = async (it) => { setBusy(`Opening ${it.name}…`); try { const ts = await vaultStoreTables(it); const now = new Date().toISOString(); const add = {}; ts.forEach(t => { const nid = prjUid(); add[nid] = { id: nid, name: t.name, headers: t.headers, rows: t.rows, created: now, updated: now, source: "storage" }; });
+      setWbDs(x => ({ ...x, ...add })); setPick(Object.keys(add)[0]); setWb(true); } catch (e) { setErr(e.message); } setBusy(""); };
+  const publish = async (it) => { setBusy(`Opening ${it.name}…`); try { const ts = await vaultStoreTables(it); onPublish(ts[0]); if (ts.length > 1) notify(`${it.name} has ${ts.length} sheets; the first one was used. Open it in the Workbench to pick another.`); } catch (e) { setErr(e.message); } setBusy(""); };
+  const download = async (it) => { try { if (it.kind === "table") { const [t] = await vaultStoreTables(it); const esc = (v) => { const s2 = String(v ?? ""); return /[",\n]/.test(s2) ? `"${s2.replace(/"/g, '""')}"` : s2; }; wxSave(new Blob(["\ufeff" + [t.headers, ...t.rows].map(r => r.map(esc).join(",")).join("\n")], { type: "text/csv" }), wxSlug(it.name) + ".csv"); return; }
+      const r = await fetch(`/api/admin/library-storage/${encodeURIComponent(it.id)}`); if (!r.ok) throw new Error(`Download failed (${r.status})`); const blob = new Blob([await r.arrayBuffer()], { type: it.mime || "application/octet-stream" });
+      if (/^(application\/pdf|image\/)/.test(it.mime || "")) { const url = URL.createObjectURL(blob); const w = window.open(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 60000); if (w) return; } wxSave(blob, it.name); } catch (e) { setErr(e.message); } };
+  const edit = async (it, field) => { const cur = it[field] || ""; const v = window.prompt(field === "name" ? "New name" : field === "folder" ? "Folder (leave empty for none)" : "Note", cur); if (v === null || v === cur) return;
+    try { await vaultCall("PATCH", `/api/admin/library-storage/${it.id}`, { [field]: v }); load(); } catch (e) { setErr(e.message); } };
+  const del = async (it) => { try { await vaultCall("DELETE", `/api/admin/library-storage/${it.id}`); setConfirm(null); notify(`Deleted “${it.name}” from storage`); load(); } catch (e) { setErr(e.message); } };
+  const card = { background: C.card, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16, marginBottom: 14 };
+  if (err && !items) return <div style={card}><p style={{ color: C.red, fontSize: 13 }}>Could not open storage: {err}</p><p style={wbNote}>If this is the first time, run supabase_library_storage.sql in Supabase → SQL Editor, then reload.</p><button type="button" style={wbSmallBtn()} onClick={load}>Try again</button></div>;
+  const folders = items ? [...new Set(items.map(x => x.folder).filter(Boolean))].sort() : [];
+  const shown = (items || []).filter(x => (filt === "all" || (filt === "" ? !x.folder : x.folder === filt)) && (!q || `${x.name} ${x.note || ""} ${x.folder || ""}`.toLowerCase().includes(q.toLowerCase())));
+  return <div>
+    <div style={card}>
+      <h3 style={{ margin: "0 0 4px", fontSize: 14, color: C.text }}>Storage</h3>
+      <p style={{ ...wbNote, margin: "0 0 10px" }}>Keep raw files and tables you are still working on. Nothing here is ever shown to users. When a table is ready, press Make Vault dataset to describe, document and publish it.</p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <input aria-label="Folder for new items" list="vault-folders" placeholder="Folder (optional)" value={folder} onChange={e => setFolder(e.target.value)} style={{ ...inp, width: 170, padding: "6px 8px", fontSize: 12.5 }} /><datalist id="vault-folders">{folders.map(f => <option key={f} value={f} />)}</datalist>
+        <input aria-label="Note for new items" placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} style={{ ...inp, width: 220, padding: "6px 8px", fontSize: 12.5 }} />
+        <button type="button" style={btn()} disabled={!!busy} onClick={() => fileRef.current?.click()}>Upload files</button>
+        <input ref={fileRef} type="file" multiple hidden aria-label="Choose files for storage" onChange={e => { upload(e.target.files); e.target.value = ""; }} />
+        <button type="button" style={btn(C.teal)} onClick={() => setWb(true)}>Open Workbench</button>
+        {wbList.length > 0 && <><select aria-label="Workbench dataset to keep" value={pick} onChange={e => setPick(e.target.value)} style={{ ...sel, width: "auto", padding: "6px 8px", fontSize: 12.5 }}><option value="">Choose a Workbench dataset…</option>{wbList.map(x => <option key={x.id} value={x.id}>{x.name} ({x.rows.length.toLocaleString()} rows)</option>)}</select>
+          <button type="button" style={wbSmallBtn()} disabled={!pick || !!busy} onClick={saveWb}>Save to storage</button></>}
+        {busy && <span role="status" style={{ fontSize: 12, color: C.gold }}>{busy}</span>}
+      </div>
+      {err && <p role="alert" style={{ color: C.red, fontSize: 12.5, margin: "8px 0 0" }}>{err} <button type="button" style={{ ...wbSmallBtn(), padding: "1px 6px", fontSize: 11 }} onClick={() => setErr("")}>OK</button></p>}
+    </div>
+    <div style={card}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 14, color: C.text, flex: 1 }}>Stored items ({(items || []).length})</h3>
+        <select aria-label="Filter by folder" value={filt} onChange={e => setFilt(e.target.value)} style={{ ...sel, width: "auto", padding: "5px 8px", fontSize: 12 }}><option value="all">All folders</option><option value="">No folder</option>{folders.map(f => <option key={f} value={f}>{f}</option>)}</select>
+        <input aria-label="Search storage" placeholder="Search…" value={q} onChange={e => setQ(e.target.value)} style={{ ...inp, width: 180, padding: "5px 8px", fontSize: 12 }} /></div>
+      {!items ? <p style={wbNote} role="status">Loading…</p> : !items.length ? <p style={wbNote}>Storage is empty. Upload files, or save tables from the Workbench.</p> :
+      <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <thead><tr style={{ textAlign: "left", color: C.mid }}>{["Name", "Type", "Folder", "Size", "Updated", ""].map(h => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${C.border}`, fontWeight: 600 }}>{h}</th>)}</tr></thead>
+        <tbody>{shown.map(it => <tr key={it.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+          <td style={{ padding: 8, minWidth: 180 }}><button type="button" onClick={() => edit(it, "name")} title="Rename" style={{ background: "none", border: "none", padding: 0, color: C.text, fontWeight: 600, cursor: "pointer", textAlign: "left", fontSize: 13 }}>{it.name}</button>
+            <div style={{ fontSize: 11.5, color: C.dim, cursor: "pointer" }} onClick={() => edit(it, "note")} title="Edit note">{it.note || "add a note"}</div></td>
+          <td style={{ padding: 8 }}><span style={{ fontSize: 10, fontWeight: 700, color: it.kind === "table" ? C.teal : C.gold, border: `1px solid ${it.kind === "table" ? C.teal : C.gold}55`, borderRadius: 4, padding: "1px 5px" }}>{it.kind === "table" ? "TABLE" : vaultKindIcon(it.kind)}</span></td>
+          <td style={{ padding: 8 }}><button type="button" onClick={() => edit(it, "folder")} title="Move to a folder" style={{ background: "none", border: "none", padding: 0, color: it.folder ? C.text : C.dim, cursor: "pointer", fontSize: 12.5 }}>{it.folder || "—"}</button></td>
+          <td style={{ padding: 8, color: C.mid, whiteSpace: "nowrap" }}>{it.kind === "table" ? `${(it.n_rows || 0).toLocaleString()} × ${it.n_cols}` : vaultSize(it.size_bytes)}</td>
+          <td style={{ padding: 8, color: C.dim, whiteSpace: "nowrap" }}>{vaultWhen(it.updated_at)}</td>
+          <td style={{ padding: 8, whiteSpace: "nowrap" }}>
+            {vaultIsTabular(it) && <><button type="button" style={wbSmallBtn()} onClick={() => toWb(it)}>Open in Workbench</button> <button type="button" style={wbSmallBtn(C.teal)} onClick={() => publish(it)}>Make Vault dataset</button> </>}
+            <button type="button" style={wbSmallBtn()} onClick={() => download(it)}>{/^(pdf|image)$/.test(it.kind) ? "View" : "Download"}</button> <button type="button" style={wbSmallBtn(C.red)} aria-label={`Delete ${it.name}`} onClick={() => setConfirm(it)}>Delete</button></td></tr>)}</tbody></table></div>}
+    </div>
+    {confirm && <div role="dialog" aria-modal="true" aria-label="Delete from storage" style={{ position: "fixed", inset: 0, background: C.overlay, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ ...card, maxWidth: 400, marginBottom: 0 }}><h3 style={{ marginTop: 0, fontSize: 15, color: C.text }}>Delete “{confirm.name}” from storage?</h3><p style={wbNote}>This cannot be undone. Published Vault datasets are not affected.</p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}><button type="button" style={wbSmallBtn()} onClick={() => setConfirm(null)}>Cancel</button><button type="button" style={btn(C.red)} onClick={() => del(confirm)}>Delete</button></div></div></div>}
+    {wb && <Workbench startTab="datasets" onClose={() => setWb(false)} datasets={wbDs} setDatasets={setWbDs} formulas={wbF} setFormulas={setWbF} coding={wbC} setCoding={setWbC} optim={wbO} setOptim={setWbO}
+      onChart={() => notify("Charts are made from the user dashboard. Save the table to storage instead.")} onImpact={() => notify("The Impact Lab is on the user dashboard.")} basketTable={() => null} />}
   </div>;
 }
 

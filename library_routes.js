@@ -148,6 +148,51 @@ module.exports = function registerLibrary(app, { sbFetch }) {
   app.delete("/api/admin/library/:id/files/:fid", async (req, res) => {
     if (!adminOnly(req, res)) return;
     try { await sbFetch("DELETE", "ecoscope_library_files", null, `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(req.params.id)}`); res.json({ ok: true }); } catch (e) { fail(res, e); } });
+  // ══════════════ ADMIN STORAGE: raw files and work-in-progress tables, never shown to users ══════════════
+  const ST_META = "id,name,kind,mime,folder,note,size_bytes,n_rows,n_cols,created_at,updated_at,updated_by";
+  const stOne = async (id, cols = ST_META) => { const r = await sbFetch("GET", "ecoscope_library_storage", null, `?id=eq.${enc(id)}&select=${cols}`); return Array.isArray(r) && r[0] ? r[0] : null; };
+  app.get("/api/admin/library-storage", async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const r = await sbFetch("GET", "ecoscope_library_storage", null, `?select=${ST_META}&order=updated_at.desc`); if (bad(r)) throw new Error(JSON.stringify(r).slice(0, 200)); res.json(r); } catch (e) { fail(res, e, "admin storage"); } });
+  // a table (JSON body: name, folder, note, headers, rows)
+  app.post("/api/admin/library-storage/table", big, async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const b = req.body || {}; const t = tableOf({ data: { headers: b.headers, rows: b.rows } }); const now = new Date().toISOString();
+      const row = { id: crypto.randomUUID(), name: clean(b.name, 200) || "Untitled table", kind: "table", mime: "application/json", folder: clean(b.folder, 80) || null, note: clean(b.note, 500) || null,
+        size_bytes: t.size_bytes, n_rows: t.n_rows, n_cols: t.n_cols, table_data: { headers: t.headers, rows: t.rows }, data: null, created_at: now, updated_at: now, updated_by: req.auth.username };
+      const out = await sbFetch("POST", "ecoscope_library_storage", row); if (bad(out)) throw new Error(JSON.stringify(out).slice(0, 200));
+      await logAct(req.auth.username, "Storage: table saved", `${row.name} · ${row.n_rows} rows`); const { table_data, data, ...m } = row; res.json(m);
+    } catch (e) { if (e.http) return deny(res, e.http, e.message, "bad_request"); fail(res, e, "admin storage"); } });
+  // a file (raw bytes; ?name=&type=&folder=&note=)
+  app.post("/api/admin/library-storage/file", raw, async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]); if (!buf.length) return deny(res, 400, "The file is empty.", "bad_request");
+      if (buf.length > FILE_MAX) return deny(res, 413, `Each file can be up to ${FILE_MAX / 1048576} MB.`, "too_large");
+      const name = clean(req.query.name, 200).replace(/[\\/:*?"<>|\r\n]+/g, "_") || "file"; const mime = clean(req.query.type, 120).replace(/[^\w.+\/-]/g, "") || "application/octet-stream"; const now = new Date().toISOString();
+      const row = { id: crypto.randomUUID(), name, kind: kindOf(name, mime), mime, folder: clean(req.query.folder, 80) || null, note: clean(req.query.note, 500) || null, size_bytes: buf.length, n_rows: null, n_cols: null, table_data: null, data: buf.toString("base64"), created_at: now, updated_at: now, updated_by: req.auth.username };
+      const out = await sbFetch("POST", "ecoscope_library_storage", row); if (bad(out)) throw new Error(JSON.stringify(out).slice(0, 200));
+      await logAct(req.auth.username, "Storage: file saved", name); const { table_data, data, ...m } = row; res.json(m);
+    } catch (e) { fail(res, e, "admin storage"); } });
+  // open: a table comes back as JSON, a file as its bytes
+  app.get("/api/admin/library-storage/:id", async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const it = await stOne(req.params.id, "*"); if (!it) return deny(res, 404, "Not found in storage.", "not_found");
+      if (it.kind === "table") { const { data, ...m } = it; return res.json(m); }
+      const buf = Buffer.from(it.data || "", "base64"); res.setHeader("Content-Type", it.mime || "application/octet-stream"); res.setHeader("Content-Length", buf.length);
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${enc(it.name)}`); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, no-store"); res.end(buf);
+    } catch (e) { fail(res, e, "admin storage"); } });
+  app.patch("/api/admin/library-storage/:id", big, async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const it = await stOne(req.params.id, "id,kind,name"); if (!it) return deny(res, 404, "Not found in storage.", "not_found"); const b = req.body || {}; const upd = { updated_at: new Date().toISOString(), updated_by: req.auth.username };
+      if (b.name !== undefined) upd.name = clean(b.name, 200) || it.name; if (b.folder !== undefined) upd.folder = clean(b.folder, 80) || null; if (b.note !== undefined) upd.note = clean(b.note, 500) || null;
+      if (b.headers && it.kind === "table") { const t = tableOf({ data: { headers: b.headers, rows: b.rows } }); Object.assign(upd, { table_data: { headers: t.headers, rows: t.rows }, n_rows: t.n_rows, n_cols: t.n_cols, size_bytes: t.size_bytes }); }
+      await sbFetch("PATCH", "ecoscope_library_storage", upd, `?id=eq.${enc(it.id)}`); res.json(await stOne(it.id));
+    } catch (e) { if (e.http) return deny(res, e.http, e.message, "bad_request"); fail(res, e, "admin storage"); } });
+  app.delete("/api/admin/library-storage/:id", async (req, res) => {
+    if (!adminOnly(req, res)) return;
+    try { const it = await stOne(req.params.id, "id,name"); if (!it) return deny(res, 404, "Not found in storage.", "not_found"); await sbFetch("DELETE", "ecoscope_library_storage", null, `?id=eq.${enc(it.id)}`);
+      await logAct(req.auth.username, "Storage: deleted", it.name); res.json({ ok: true }); } catch (e) { fail(res, e, "admin storage"); } });
+
   app.patch("/api/admin/library-settings", async (req, res) => {
     if (!adminOnly(req, res)) return;
     try { const cur = await getSettings(true); const b = req.body || {}; const next = { name: b.name !== undefined ? (clean(b.name, 60) || DEFAULT_SETTINGS.name) : cur.name, categories: { ...cur.categories } };
