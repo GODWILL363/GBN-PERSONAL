@@ -15,7 +15,8 @@
   "scripts": {
     "start": "node server.js",
     "build": "react-scripts build",
-    "dev": "react-scripts start"
+    "dev": "react-scripts start",
+    "local": "node --env-file=.env server.js"
   },
   "browserslist": {
     "production": [
