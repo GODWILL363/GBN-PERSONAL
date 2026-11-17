@@ -59,7 +59,7 @@ const US = {
     const res = await this._call('POST', '/api/auth/login', {username, password});
     if(res.error) return {error: res.error};
     localStorage.setItem(this.SESS, JSON.stringify({
-      username,
+      username: res.user?.username || username, // the real username, even when signing in with an email
       role: res.user?.role,
       plan: res.user?.plan,
       token: res.token,

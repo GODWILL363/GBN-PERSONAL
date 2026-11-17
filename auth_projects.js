@@ -106,8 +106,12 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
 
   app.post("/api/auth/login", async (req, res) => {
     try { const username = clean(req.body?.username, 254), password = String(req.body?.password || ""); if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-      const user = await one(`?username=eq.${enc(username)}&select=*`) || (username.includes("@") ? await one(`?email=eq.${enc(username.toLowerCase())}&select=*`) : null);
-      if (!user) return res.status(401).json({ error: "Username not found. Please create an account." });
+      // exact username, then email (any capitalisation), then the username in any capitalisation
+      const like = (v) => enc(v.replace(/[%_\\]/g, "\\$&"));
+      const user = await one(`?username=eq.${enc(username)}&select=*`)
+        || (username.includes("@") ? await one(`?email=ilike.${like(username)}&select=*`) : null)
+        || (/^[A-Za-z0-9_.-]+$/.test(username) ? await one(`?username=ilike.${like(username)}&select=*`) : null);
+      if (!user) return res.status(401).json({ error: "No account with that username or email. Please create an account." });
       let ok = false, upgrade = false;
       if (user.password_hash === "bootstrap") { const boot = process.env.ADMIN_BOOTSTRAP_PASSWORD; ok = !!boot && user.username === "admin" && password === boot; upgrade = ok; }
       else { const c = await checkPw(password, user.password_hash); ok = c.ok; upgrade = c.ok && c.legacy; }
