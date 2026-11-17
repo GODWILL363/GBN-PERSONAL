@@ -14,6 +14,16 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY || "";
 
 const jsonSmall = express.json({ limit: "2mb" }), jsonBig = express.json({ limit: "25mb" });
 app.use((req, res, next) => (req.path.startsWith("/api/projects") || req.path.startsWith("/api/admin/library") ? jsonBig : jsonSmall)(req, res, next)); // projects and Vault datasets carry tables
+// security headers on every response; the Content-Security-Policy is report-only for now, so it cannot break the app
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  if (req.secure || req.headers["x-forwarded-proto"] === "https") res.setHeader("Strict-Transport-Security", "max-age=15552000");
+  if (!req.path.startsWith("/api/")) res.setHeader("Content-Security-Policy-Report-Only", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; object-src 'none'");
+  next();
+});
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -326,6 +336,11 @@ function proxyGet(target, res, redirectsLeft, attempt) {
   upstreamReq.end();
 }
 
+// the data proxy is public (charts load before sign-in), so limit each address to 600 requests a minute (country comparisons fire many requests at once)
+const PROXY_HITS = new Map();
+app.get("/api/proxy-data", (req, res, next) => { const now = Date.now(); let b = PROXY_HITS.get(req.ip); if (!b || now - b.t >= 60000) { b = { t: now, n: 0 }; PROXY_HITS.set(req.ip, b); }
+  if (PROXY_HITS.size > 20000) for (const [k, v] of PROXY_HITS) if (now - v.t >= 60000) PROXY_HITS.delete(k);
+  if (++b.n > 600) { res.setHeader("Retry-After", Math.ceil((60000 - (now - b.t)) / 1000)); return res.status(429).json({ error: "Too many data requests. Please wait a minute." }); } next(); });
 app.get("/api/proxy-data", (req, res) => {
   const target = req.query.url;
   if (!target) return res.status(400).json({ error: "Missing url parameter" });

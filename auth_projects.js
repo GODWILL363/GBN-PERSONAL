@@ -36,11 +36,20 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
   const scrub1 = (o) => { if (!("password_hash" in o) && !(o.user && typeof o.user === "object" && "password_hash" in o.user)) return o; const { password_hash, ...rest } = o; if (rest.user && typeof rest.user === "object") { const { password_hash: _p, ...u } = rest.user; rest.user = u; } return rest; };
   app.use("/api", (req, res, next) => { const json = res.json.bind(res); res.json = (body) => json(scrub(body)); next(); });
 
-  // ── 2. Who is calling? ──
-  app.use((req, res, next) => {
-    const h = req.headers.authorization || ""; const t = h.startsWith("Bearer ") ? h.slice(7) : null; const p = verify(t);
-    req.auth = p ? { username: p.u, role: p.r, admin: p.r === "admin" } : null; next();
+  // ── 2. Who is calling? The token proves identity; role and status are re-read from the database (cached 60 s),
+  //       so a demoted admin, a suspended or a deleted account loses access within a minute, not after 30 days ──
+  const LIVE = new Map(); const LIVE_TTL = 60000;
+  const liveUser = async (username) => { const hit = LIVE.get(username); if (hit && Date.now() - hit.t < LIVE_TTL) return hit.u;
+    const r = await sbFetch("GET", "ecoscope_users", null, `?username=eq.${encodeURIComponent(username)}&select=username,role,plan_status`);
+    if (!Array.isArray(r)) throw new Error("user store unavailable"); const u = r[0] || null;
+    LIVE.set(username, { t: Date.now(), u }); if (LIVE.size > 5000) LIVE.delete(LIVE.keys().next().value); return u; };
+  app.use(async (req, res, next) => {
+    const h = req.headers.authorization || ""; const t = h.startsWith("Bearer ") ? h.slice(7) : null; const p = verify(t); req.auth = null;
+    if (p) { try { const u = await liveUser(p.u); if (u && u.plan_status !== "suspended") { const role = u.role || (u.username === "admin" ? "admin" : "user"); req.auth = { username: u.username, role, admin: role === "admin" }; } }
+      catch (e) { console.error("[auth] live check:", e.message); req.auth = { username: p.u, role: p.r, admin: p.r === "admin" }; } } // database unreachable: fall back to the signed token
+    next();
   });
+  const forgetUser = (username) => LIVE.delete(username);
 
   // ── 3. Route rules ──
   const PUBLIC = [["POST", /^\/api\/auth\/(login|register)$/], ["GET", /^\/api\/health$/], ["GET", /^\/api\/proxy-data$/]];
@@ -53,6 +62,8 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
     if (!req.auth) return deny(res, 401, "Please sign in again.", "auth_required");
     if (ADMIN.some(([mm, re]) => mm === m && re.test(full)) && !req.auth.admin) return deny(res, 403, "Administrator access only.", "forbidden");
     const me = req.auth.username;
+    // an admin changing someone's role, plan or status takes effect at once
+    { const mm = full.match(/^\/api\/users\/([^/]+)(\/plan)?$/); if (mm && m !== "GET" && mm[1] !== "invite") forgetUser(decodeURIComponent(mm[1])); }
     // a user may only act on their own account and messages; admins on anyone's
     if (!req.auth.admin) {
       const self = (name) => !name || String(name) === me;
@@ -65,11 +76,14 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       }
       if (/^\/api\/support\/messages$/.test(full)) {
         if (m === "GET" && !self(req.query.username)) return deny(res, 403, "Not your conversation.", "forbidden");
-        if (m === "POST") { if (!self(req.body?.username)) return deny(res, 403, "Not your conversation.", "forbidden"); if (req.body?.sender === "admin") req.body.sender = "user"; }
+        if (m === "POST") { if (!self(req.body?.username)) return deny(res, 403, "Not your conversation.", "forbidden");
+          // the help assistant's replies are saved by the app as "bot" in the assistant channel only; the support chat is always the user
+          if (req.body?.sender === "admin" || (req.body?.sender === "bot" && req.body?.channel !== "assistant")) req.body.sender = "user"; }
       }
       if (m === "POST" && /^\/api\/support\/read$/.test(full) && (!self(req.body?.username) || req.body?.reader === "admin")) return deny(res, 403, "Not your conversation.", "forbidden");
       if (m === "POST" && /^\/api\/auth\/change-password$/.test(full) && !self(req.body?.username)) return deny(res, 403, "You can only change your own password.", "forbidden");
-      if (m === "POST" && /^\/api\/(requests|activity)$/.test(full) && req.body) req.body.username = me;
+      if (m === "POST" && /^\/api\/(requests|activity)$/.test(full) && req.body) { req.body.username = me;
+        if (full === "/api/activity") { req.body.action = String(req.body.action || "").slice(0, 80); req.body.detail = String(req.body.detail || "").slice(0, 300); } }
     }
     next();
   });
@@ -104,18 +118,26 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       await logAct(username, "Registered", "New account · Free plan", req.ip); const { password_hash, invite_token, ...safe } = u; res.json({ user: safe });
     } catch (e) { console.error("[account] register:", e.message); res.status(500).json({ error: "Registration failed. Please try again." }); } });
 
+  // ── sign-in guard: 10 failed attempts per username or per address lock that key for 15 minutes ──
+  const FAILS = new Map(); const LOCK_N = 10, LOCK_MS = 15 * 60e3;
+  const locked = (k) => { const f = FAILS.get(k); return !!f && Date.now() - f.t < LOCK_MS && f.n >= LOCK_N; };
+  const failed = (k) => { const f = FAILS.get(k); if (!f || Date.now() - f.t >= LOCK_MS) FAILS.set(k, { t: Date.now(), n: 1 }); else f.n++; if (FAILS.size > 20000) FAILS.clear(); };
+  const BAD_LOGIN = "Incorrect username or password.";
   app.post("/api/auth/login", async (req, res) => {
     try { const username = clean(req.body?.username, 254), password = String(req.body?.password || ""); if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+      const kU = `u:${username.toLowerCase()}`, kI = `i:${req.ip}`;
+      if (locked(kU) || locked(kI)) return res.status(429).json({ error: "Too many failed sign-ins. Please wait 15 minutes, or reset your password." });
       // exact username, then email (any capitalisation), then the username in any capitalisation
       const like = (v) => enc(v.replace(/[%_\\]/g, "\\$&"));
       const user = await one(`?username=eq.${enc(username)}&select=*`)
         || (username.includes("@") ? await one(`?email=ilike.${like(username)}&select=*`) : null)
         || (/^[A-Za-z0-9_.-]+$/.test(username) ? await one(`?username=ilike.${like(username)}&select=*`) : null);
-      if (!user) return res.status(401).json({ error: "No account with that username or email. Please create an account." });
+      if (!user) { failed(kU); failed(kI); return res.status(401).json({ error: BAD_LOGIN }); }
       let ok = false, upgrade = false;
       if (user.password_hash === "bootstrap") { const boot = process.env.ADMIN_BOOTSTRAP_PASSWORD; ok = !!boot && user.username === "admin" && password === boot; upgrade = ok; }
       else { const c = await checkPw(password, user.password_hash); ok = c.ok; upgrade = c.ok && c.legacy; }
-      if (!ok) { await logAct(user.username, "Login failed", "Wrong password", req.ip); return res.status(401).json({ error: "Incorrect password." }); }
+      if (!ok) { failed(kU); failed(kI); await logAct(user.username, "Login failed", "Wrong password", req.ip); return res.status(401).json({ error: BAD_LOGIN }); }
+      FAILS.delete(kU);
       if (user.plan_status === "suspended") return res.status(403).json({ error: "Account suspended. Contact support@ecoscope.app" });
       const now = new Date().toISOString(); await sbFetch("PATCH", "ecoscope_users", { last_login: now, ...(upgrade ? { password_hash: await hashPw(password) } : {}) }, `?id=eq.${enc(user.id)}`);
       await logAct(user.username, "Login", `Signed in · Plan: ${user.plan}`, req.ip);
@@ -147,7 +169,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       if (ids.length) await sbFetch("DELETE", "ecoscope_projects", null, `?owner=eq.${enc(me)}`);
       await sbFetch("DELETE", "ecoscope_project_members", null, `?username=eq.${enc(me)}`);
       for (const t of ["ecoscope_support_messages", "ecoscope_support_threads", "ecoscope_requests", "ecoscope_activity"]) { try { await sbFetch("DELETE", t, null, `?username=eq.${enc(me)}`); } catch (e) { console.error("[account] delete", t, e.message); } }
-      await sbFetch("DELETE", "ecoscope_users", null, `?username=eq.${enc(me)}`); console.log(`[account] deleted ${me}: ${ids.length} projects`);
+      await sbFetch("DELETE", "ecoscope_users", null, `?username=eq.${enc(me)}`); forgetUser(me); console.log(`[account] deleted ${me}: ${ids.length} projects`);
       res.json({ ok: true, projects: ids.length });
     } catch (e) { console.error("[account] delete:", e.message); res.status(500).json({ error: "Could not delete the account. Nothing was removed from sign-in; please try again." }); } });
 
