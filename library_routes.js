@@ -16,7 +16,7 @@ const CATS = ["micro", "macro", "qualitative", "quantitative", "primary", "secon
 const PLANS = ["free", "pro", "enterprise"];
 const FILE_MAX = 15 * 1024 * 1024;
 const DATA_MAX = 20 * 1024 * 1024;
-const META = "id,title,description,categories,source_name,source_url,citation,license,coverage,notes,audience,allow_download,published,n_rows,n_cols,size_bytes,created_at,updated_at,updated_by,published_at";
+const META = "id,title,description,categories,source_name,source_url,citation,license,coverage,notes,audience,allow_download,published,n_rows,n_cols,size_bytes,created_at,updated_at,updated_by,published_at,iesgi,current_version";
 const FILE_META = "id,dataset_id,name,mime,kind,note,size_bytes,created_at,uploaded_by";
 
 module.exports = function registerLibrary(app, { sbFetch }) {
@@ -57,13 +57,18 @@ module.exports = function registerLibrary(app, { sbFetch }) {
     if (/\.(pptx|ppt|odp)$/.test(n)) return "slides"; if (/\.(png|jpe?g|gif|webp|svg)$/.test(n)) return "image"; return "other"; };
 
   // who may see what
-  const userInfo = async (req) => { if (req.auth.admin) return { admin: true, username: req.auth.username };
+  const userInfo = async (req) => { if (req.auth.admin) return { admin: true, username: req.auth.username, orgs: [] };
     const r = await sbFetch("GET", "ecoscope_users", null, `?username=eq.${enc(req.auth.username)}&select=username,plan,plan_status`); const u = Array.isArray(r) && r[0] ? r[0] : null;
-    return { admin: false, username: req.auth.username, plan: u && u.plan_status !== "suspended" && u.plan_status !== "invited" ? (u.plan || "free") : null }; };
+    let orgs = []; try { const m = await sbFetch("GET", "ecoscope_org_members", null, `?username=eq.${enc(req.auth.username)}&select=org_id`); orgs = Array.isArray(m) ? m.map(x => x.org_id) : []; } catch (e) { /* organisations not set up yet */ }
+    const active = u && u.plan_status !== "suspended" && u.plan_status !== "invited";
+    return { admin: false, username: req.auth.username, plan: active ? (u.plan || "free") : null, orgs: active ? orgs : [] }; };
+  const ie = (d) => (d && d.iesgi && typeof d.iesgi === "object" ? d.iesgi : {});
+  const orgOpen = (d, u) => (Array.isArray(ie(d).org_ids) ? ie(d).org_ids : []).some(o => (u.orgs || []).includes(o));
+  const publicOpen = (d, u) => !!ie(d).public && d.current_version > 0 && !!u.plan;
   const liveCats = (d, s) => (d.categories || []).filter(c => s.categories[c]);
-  const entitled = (d, u) => { if (u.admin) return true; const a = normAudience(d.audience); return (!!u.plan && a.plans.includes(u.plan)) || a.users.includes(u.username); };
+  const entitled = (d, u) => { if (u.admin) return true; const a = normAudience(d.audience); return (!!u.plan && a.plans.includes(u.plan)) || a.users.includes(u.username) || orgOpen(d, u) || publicOpen(d, u); };
   const visible = (d, s, u) => u.admin || (d.published && liveCats(d, s).length > 0 && entitled(d, u));
-  const stateOf = (d, s) => !d.published ? "draft" : !liveCats(d, s).length ? "hidden" : !(normAudience(d.audience).plans.length || normAudience(d.audience).users.length) ? "no_audience" : "live";
+  const stateOf = (d, s) => !d.published ? "draft" : !liveCats(d, s).length ? "hidden" : !(normAudience(d.audience).plans.length || normAudience(d.audience).users.length || ie(d).public || (ie(d).org_ids || []).length) ? "no_audience" : "live";
   const one = async (id, cols = META) => { const r = await sbFetch("GET", "ecoscope_library", null, `?id=eq.${enc(id)}&select=${cols}`); return Array.isArray(r) && r[0] ? r[0] : null; };
   const filesOf = async (ids) => { if (!ids.length) return {}; const r = await sbFetch("GET", "ecoscope_library_files", null, `?dataset_id=in.(${ids.map(i => `"${String(i).replace(/"/g, "")}"`).join(",")})&select=${FILE_META}&order=created_at.asc`);
     const out = {}; (Array.isArray(r) ? r : []).forEach(f => { (out[f.dataset_id] = out[f.dataset_id] || []).push(f); }); return out; };
@@ -83,7 +88,7 @@ module.exports = function registerLibrary(app, { sbFetch }) {
       logAct(req.auth.username, "Vault dataset opened", d.title);
     } catch (e) { fail(res, e); } });
   app.get("/api/library/:id/files/:fid", async (req, res) => {
-    try { const s = await getSettings(); const u = await userInfo(req); const d = await one(req.params.id, "id,title,published,categories,audience");
+    try { const s = await getSettings(); const u = await userInfo(req); const d = await one(req.params.id, "id,title,published,categories,audience,iesgi,current_version");
       if (!d || !visible(d, s, u)) return deny(res, 404, "This document is not available on your plan.", "not_found");
       const r = await sbFetch("GET", "ecoscope_library_files", null, `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(d.id)}&select=*`); const f = Array.isArray(r) && r[0];
       if (!f) return deny(res, 404, "Document not found.", "not_found");

@@ -5,6 +5,7 @@ const crypto  = require("crypto");
 const path    = require("path");
 
 const app  = express();
+app.set("trust proxy", 1); // Railway sits behind one proxy: real visitor addresses in logs
 const PORT = process.env.PORT || 3001;
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
@@ -27,6 +28,9 @@ app.use((req, res, next) => {
 // ════════════════════════════════════════════════════════════════════════════
 require("./auth_projects")(app, { sbFetch });
 require("./library_routes")(app, { sbFetch }); // Data Vault: admin-published datasets for chosen plans and users
+// AI runs only on the server's key: never store personal Anthropic keys in user settings
+app.use("/api/users", (req, res, next) => { if (req.method === "PATCH" && req.body && req.body.settings && typeof req.body.settings === "object") delete req.body.settings.anthropicKey; next(); });
+// The IESGI platform (open data, public API, citations, partners) is a separate app on the same database: set IESGI_URL to link to it.
 
 // ── Supabase helper ──────────────────────────────────────────────────────────
 function sbFetch(method, table, body, query = "") {
@@ -95,68 +99,7 @@ async function logActivity(username, action, detail, ip = "") {
 // AUTH ROUTES
 // ════════════════════════════════════════════════════════════════════════════
 
-// Register
-app.post("/api/auth/register", async (req, res) => {
-  const { username, email, password, country = "GH" } = req.body;
-  if (!username || !email || !password) return res.status(400).json({ error: "All fields required" });
-  try {
-    // Check existing
-    const existing = await sbFetch("GET", "ecoscope_users", null, `?username=eq.${encodeURIComponent(username)}&select=id`);
-    if (Array.isArray(existing) && existing.length > 0) return res.status(409).json({ error: "Username already taken." });
-    const existingEmail = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${encodeURIComponent(email)}&select=id`);
-    if (Array.isArray(existingEmail) && existingEmail.length > 0) return res.status(409).json({ error: "Email already registered." });
-
-    const user = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-      username, email,
-      password_hash: hashPw(password),
-      role: "user", plan: "free", plan_status: "active",
-      country, settings: {},
-      created_at: new Date().toISOString(),
-    };
-    const created = await sbFetch("POST", "ecoscope_users", user);
-    await logActivity(username, "Registered", `New account · Free plan`, req.ip);
-    res.json({ user: Array.isArray(created) ? created[0] : created });
-  } catch (e) {
-    console.error("Register error:", e);
-    res.status(500).json({ error: "Registration failed: " + e.message });
-  }
-});
-
-// Login
-app.post("/api/auth/login", async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-  try {
-    const users = await sbFetch("GET", "ecoscope_users", null, `?username=eq.${encodeURIComponent(username)}&select=*`);
-    console.log(`[LOGIN] user="${username}" supabase_result=${JSON.stringify(users).substring(0,120)}`);
-    if (!Array.isArray(users) || users.length === 0) return res.status(401).json({ error: "Username not found. Please create an account." });
-    const user = users[0];
-    console.log(`[LOGIN] found user=${user.username} hash_prefix=${user.password_hash?.substring(0,10)}`);
-
-    // Fix bootstrap admin
-    if (user.password_hash === "bootstrap") {
-      if (username === "admin" && password === "Admin@2024!") {
-        await sbFetch("PATCH", "ecoscope_users", { password_hash: hashPw(password) }, `?id=eq.${user.id}`);
-      } else {
-        return res.status(401).json({ error: "Incorrect password." });
-      }
-    } else if (user.password_hash !== hashPw(password)) {
-      return res.status(401).json({ error: "Incorrect password." });
-    }
-
-    if (user.plan_status === "suspended") return res.status(403).json({ error: "Account suspended. Contact support@ecoscope.app" });
-
-    // Update last login
-    await sbFetch("PATCH", "ecoscope_users", { last_login: new Date().toISOString() }, `?id=eq.${user.id}`);
-    await logActivity(username, "Login", `Signed in · Plan: ${user.plan}`, req.ip);
-    const { password_hash, ...safeUser } = user;
-    res.json({ user: { ...safeUser, last_login: new Date().toISOString() } });
-  } catch (e) {
-    console.error("Login error:", e);
-    res.status(500).json({ error: "Login failed: " + e.message });
-  }
-});
+// Register and login live in auth_projects.js (scrypt passwords, signed sessions).
 
 // ════════════════════════════════════════════════════════════════════════════
 // USER MANAGEMENT ROUTES
@@ -394,6 +337,7 @@ app.get("/api/health", (req, res) => {
     status: "ok", version: "2.0",
     supabase: !!SUPABASE_URL,
     anthropic: !!ANTHROPIC_KEY,
+    iesgi_url: process.env.IESGI_URL || null,
     ts: new Date().toISOString()
   });
 });

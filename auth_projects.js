@@ -148,9 +148,13 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
     } catch (e) { console.error("[account] delete:", e.message); res.status(500).json({ error: "Could not delete the account. Nothing was removed from sign-in; please try again." }); } });
 
   // ── AI insight (takes over server.js): same request and reply, plus a 24-hour cache so repeated charts cost nothing ──
-  const INS = new Map(); const INS_TTL = 24 * 3600e3;
+  const INS = new Map(); const INS_TTL = 24 * 3600e3; const AIUSE = { day: "", n: new Map() };
   app.post("/api/insight", async (req, res) => {
     const key = process.env.ANTHROPIC_KEY || ""; if (!key) return res.status(500).json({ error: { message: "ANTHROPIC_KEY not configured." } });
+    // one institutional key on the server, with a daily allowance per person (AI_DAILY_LIMIT, default 40; administrators unlimited)
+    if (!req.auth.admin) { const day = new Date().toISOString().slice(0, 10); const k = `${req.auth.username}|${day}`; const lim = +(process.env.AI_DAILY_LIMIT || 40);
+      if (AIUSE.day !== day) { AIUSE.day = day; AIUSE.n.clear(); } const used = AIUSE.n.get(k) || 0;
+      if (used >= lim) return res.status(429).json({ error: { message: `You have used today's ${lim} AI analyses. The allowance resets at midnight UTC.` } }); AIUSE.n.set(k, used + 1); }
     const b = req.body || {}; const f = { country: clean(b.country, 80), indicator: clean(b.indicator, 200), source: clean(b.source, 80), startYear: clean(b.startYear, 10), endYear: clean(b.endYear, 10), dataPoints: clean(b.dataPoints, 6000) };
     const ck = crypto.createHash("sha256").update(JSON.stringify(f)).digest("hex"); const hit = INS.get(ck); if (hit && Date.now() - hit.t < INS_TTL) { res.setHeader("X-Cache", "hit"); return res.json(hit.body); }
     try { const r = await new Promise((resolve, reject) => { const body = JSON.stringify({ model: process.env.INSIGHT_MODEL || "claude-sonnet-4-5", max_tokens: 600,

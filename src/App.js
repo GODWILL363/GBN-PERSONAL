@@ -5,6 +5,9 @@ import { useRef } from "react";
 // USER STORE — Supabase via server API
 // ══════════════════════════════════════════════
 // Signed session token: every /api call carries it; a 401 from the server signs the user out.
+// IESGI platform (separate app, same database and accounts): its address comes from the server's IESGI_URL
+let IESGI_URL = ""; try { fetch("/api/health").then(r => r.ok ? r.json() : null).then(j => { if (j && j.iesgi_url) IESGI_URL = String(j.iesgi_url).replace(/\/$/, ""); }).catch(() => {}); } catch (e) {}
+const openIesgi = (path) => { if (!IESGI_URL) { window.alert("The IESGI platform address is not set. Add IESGI_URL in Railway → Variables."); return; } window.open(IESGI_URL + path, "_blank", "noopener"); };
 const ecoToken = () => { try { return JSON.parse(localStorage.getItem('ecoscope_session')||'null')?.token || null; } catch { return null; } };
 if (typeof window !== 'undefined' && !window.__ecoFetchWrapped) {
   const baseFetch = window.fetch.bind(window); window.__ecoFetchWrapped = true;
@@ -9158,8 +9161,8 @@ function AdminStorage({ notify, onPublish }) {
 }
 
 // ── Users: browse the Vault ──
-function VaultBrowser({ onClose, onOpen, isMobile }) {
-  const [lib, setLib] = useState(null); const [err, setErr] = useState(""); const [cat, setCat] = useState("all"); const [q, setQ] = useState(""); const [selId, setSelId] = useState(null); const [full, setFull] = useState(null); const [busy, setBusy] = useState(""); const [page, setPage] = useState(0); const [msg, setMsg] = useState("");
+function VaultBrowser({ onClose, onOpen, isMobile, startId }) {
+  const [lib, setLib] = useState(null); const [err, setErr] = useState(""); const [cat, setCat] = useState("all"); const [q, setQ] = useState(""); const [selId, setSelId] = useState(startId || null); const [full, setFull] = useState(null); const [busy, setBusy] = useState(""); const [page, setPage] = useState(0); const [msg, setMsg] = useState("");
   useEffect(() => { vaultCall("GET", "/api/library").then(setLib).catch(e => setErr(e.message)); }, []);
   useEffect(() => { if (!selId) return; let alive = true; setFull(null); setPage(0); setBusy("Loading the data…"); vaultCall("GET", `/api/library/${selId}`).then(x => { if (alive) { setFull(x); setBusy(""); } }).catch(e => { if (alive) { setErr(e.message); setBusy(""); } }); return () => { alive = false; }; }, [selId]);
   const list = lib ? lib.datasets.filter(d => (cat === "all" || d.categories.includes(cat)) && (!q || `${d.title} ${d.source_name || ""} ${d.description || ""} ${d.coverage || ""}`.toLowerCase().includes(q.toLowerCase()))) : [];
@@ -9195,7 +9198,7 @@ function VaultBrowser({ onClose, onOpen, isMobile }) {
           {!meta ? <p style={wbNote}>Choose a dataset to see its source, supporting documents and data.</p> : <div>
             {isMobile && <button type="button" style={{ ...wbSmallBtn(), marginBottom: 8 }} onClick={() => setSelId(null)}>← All datasets</button>}
             <h3 style={{ margin: "0 0 4px", fontSize: 18, color: C.text }}>{meta.title}</h3>
-            <div style={{ marginBottom: 8 }}>{meta.categories.map(c => vaultChip(VAULT_CAT[c] || c, C.teal))}<span style={{ fontSize: 11.5, color: C.dim }}> Updated {vaultWhen(meta.updated_at)}</span></div>
+            <div style={{ marginBottom: 8 }}>{meta.categories.map(c => vaultChip(VAULT_CAT[c] || c, C.teal))}<span style={{ fontSize: 11.5, color: C.dim }}> Updated {vaultWhen(meta.updated_at)}</span>{meta.iesgi && meta.iesgi.public && meta.current_version > 0 && <button type="button" onClick={() => openIesgi(`/data/d/${encodeURIComponent(meta.id)}`)} style={{ ...wbSmallBtn(), padding: "2px 8px", fontSize: 11, marginLeft: 8 }} title="Open the public, citable version on the IESGI platform">View on IESGI · v{meta.current_version} ↗</button>}</div>
             {meta.description && <p style={{ fontSize: 13.5, color: C.text, lineHeight: 1.55, whiteSpace: "pre-wrap", margin: "0 0 12px" }}>{meta.description}</p>}
             <dl style={{ display: "grid", gridTemplateColumns: "max-content 1fr", gap: "4px 14px", fontSize: 12.5, margin: "0 0 12px" }}>
               <dt style={{ color: C.mid }}>Source</dt><dd style={{ margin: 0, color: C.text }}>{meta.source_name || "—"}{meta.source_url && <> · <a href={meta.source_url} target="_blank" rel="noopener noreferrer" style={{ color: C.teal }}>{meta.source_url.replace(/^https?:\/\//, "").slice(0, 60)}</a></>}</dd>
@@ -11603,7 +11606,10 @@ function Dashboard({user, onLogout}) {
   const [datasets,setDatasets]=useState({}); const [impactSeed,setImpactSeed]=useState(null); const [formulas,setFormulas]=useState({}); const [coding,setCoding]=useState(null); const [optim,setOptim]=useState(null);
   const [showWorkbench,setShowWorkbench]=useState(null); // null | tab name
   // Data Vault: datasets the administrator publishes to this user's plan (or to this user)
-  const [vaultInfo,setVaultInfo]=useState(null); const [showVault,setShowVault]=useState(false);
+  const [vaultInfo,setVaultInfo]=useState(null);
+  // "Analyse in EcoScope" on the IESGI platform opens /?vault=<dataset id>
+  const [vaultStart]=useState(()=>{ try { const v=new URLSearchParams(window.location.search).get("vault"); if(v){ const u=new URL(window.location.href); u.searchParams.delete("vault"); window.history.replaceState(null,"",u.pathname+u.search+u.hash); } return v||null; } catch(e){ return null; } });
+  const [showVault,setShowVault]=useState(!!vaultStart);
   useEffect(()=>{ let alive=true; const get=()=>fetch("/api/library").then(r=>r.ok?r.json():null).then(j=>{ if(alive&&j) setVaultInfo({ name:j.name, n:(j.datasets||[]).length }); }).catch(()=>{});
     get(); const t=setInterval(get,300000); return ()=>{ alive=false; clearInterval(t); }; },[]);
   const [dash,setDash]=useState(null); const [showDash,setShowDash]=useState(false); // dashboards: { boards:[{id,name,tiles,filters,cols}], active }
@@ -11801,6 +11807,10 @@ function Dashboard({user, onLogout}) {
                   null,
                   {icon:<Ico n="arrowup"/>,label:"Request plan upgrade",action:()=>{setShowUpgradeReq(true);setShowUserMenu(false);}},
                   {icon:<Ico n="message"/>,label:"Help & support chat",action:()=>openSupport("assistant")},
+                  null,
+                  {icon:<Ico n="globe"/>,label:"IESGI open data",action:()=>{openIesgi("/data");setShowUserMenu(false);}},
+                  {icon:<Ico n="sheet"/>,label:"Contribute data to IESGI",action:()=>{openIesgi("/data/contribute");setShowUserMenu(false);}},
+                  {icon:<Ico n="settings"/>,label:"IESGI API keys and organisations",action:()=>{openIesgi("/data/me");setShowUserMenu(false);}},
                   null,
                   {icon:"←",label:"Sign Out",action:onLogout,danger:true},
                 ].map((item,i)=> item===null
@@ -12860,7 +12870,7 @@ function Dashboard({user, onLogout}) {
         onAccount={u=>setLiveUser(x=>({...x,...u}))} onDeleted={()=>{ setShowSettings(false); onLogout(); }}/>}
       <SupportChat user={liveUser} open={chatOpen} setOpen={setChatOpen} mode={chatMode} setMode={setChatMode}/>
       {/* DATA IMPORT MODAL */}
-      {showVault&&<VaultBrowser isMobile={isMobile} onClose={()=>setShowVault(false)} onOpen={(d)=>{ const id=prjUid(); const now=new Date().toISOString(); setDatasets(ds=>({ ...ds, [id]:{ id, name:d.title, headers:[...d.headers], rows:d.rows.map(r=>r.map(v=>v==null?"":String(v))), created:now, updated:now, source:"vault", note:[d.source_name, d.citation].filter(Boolean).join(" · ") } })); setShowVault(false); setShowWorkbench("datasets"); }}/>}
+      {showVault&&<VaultBrowser isMobile={isMobile} startId={vaultStart} onClose={()=>setShowVault(false)} onOpen={(d)=>{ const id=prjUid(); const now=new Date().toISOString(); setDatasets(ds=>({ ...ds, [id]:{ id, name:d.title, headers:[...d.headers], rows:d.rows.map(r=>r.map(v=>v==null?"":String(v))), created:now, updated:now, source:"vault", note:[d.source_name, d.citation].filter(Boolean).join(" · ") } })); setShowVault(false); setShowWorkbench("datasets"); }}/>}
       {showWorkbench&&<Workbench startTab={showWorkbench} onClose={()=>setShowWorkbench(null)} datasets={datasets} setDatasets={setDatasets} formulas={formulas} setFormulas={setFormulas} coding={coding} setCoding={setCoding} optim={optim} setOptim={setOptim}
         basketTable={basketTable} onChart={d=>{ if (importTable({ headers:d.headers, rows:d.rows }, d.name, { fromWorkbench:true })) setShowWorkbench(null); }} onImpact={d=>{ setImpactSeed({ headers:d.headers, rows:d.rows, name:d.name }); setShowWorkbench(null); setShowImpact(true); }}/>}
       {panelPick&&<PanelImportModal pick={panelPick} maxVars={plan.aiInsights?10:4} onClose={()=>setPanelPick(null)}
@@ -13301,6 +13311,9 @@ function AdminPanel({user, onLogout}) {
                   {icon:<Ico n="users"/>,label:"User Management",action:()=>{setTab("users");setShowUserMenu(false);}},
                   {icon:<Ico n="globe"/>,label:"Data Sources",action:()=>{setTab("sources");setShowUserMenu(false);}},
                   {icon:<Ico n="message"/>,label:`Support inbox${supportUnread?` (${supportUnread})`:""}`,action:()=>{setTab("support");setShowUserMenu(false);}},
+                  null,
+                  {icon:<Ico n="globe"/>,label:"IESGI console (versions, API, partners)",action:()=>{openIesgi("/data/admin");setShowUserMenu(false);}},
+                  {icon:<Ico n="clipboard"/>,label:"IESGI public portal",action:()=>{openIesgi("/data");setShowUserMenu(false);}},
                   null,
                   {icon:"←",label:"Sign Out",action:onLogout,danger:true},
                 ].map((item,i)=>item===null
