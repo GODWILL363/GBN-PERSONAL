@@ -2064,6 +2064,40 @@ const card = {
 // LOGIN
 // ══════════════════════════════════════════════
 
+// ── Accept an invitation: /?invite=<token> → choose a username and password → signed in ──
+function AcceptInvite({ token, onLogin, onCancel }){
+  const [info,setInfo]=useState(null); const [err,setErr]=useState(""); const [u,setU]=useState(""); const [p,setP]=useState(""); const [p2,setP2]=useState(""); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ fetch(`/api/auth/invite/${encodeURIComponent(token)}`).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(({ok,j})=>{ if(ok) setInfo(j); else setErr(j.error||"This invitation link is not valid."); }).catch(()=>setErr("Could not check the invitation. Please try again.")); },[token]);
+  const unErrs=u.trim()?checkUn(u.trim()):[]; const pwErrs=p?checkPw(p):[];
+  const go=async e=>{ e.preventDefault(); setErr("");
+    if(!u.trim()||unErrs.length){ setErr(unErrs[0]||"Choose a username"); return; } if(pwErrs.length){ setErr(pwErrs[0]); return; } if(p!==p2){ setErr("Passwords do not match"); return; }
+    setBusy(true);
+    try{ const r=await fetch("/api/auth/accept-invite",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,username:u.trim(),password:p})}); const j=await r.json();
+      if(!r.ok){ setErr(j.error||"Could not finish setting up the account."); setBusy(false); return; }
+      const nu=j.user; const initials=nu.username.slice(0,2).toUpperCase(); const avatarColor=["#6ea8fe","#3ecf8e","#f0a950","#b39ddb","#56c7d4"][Math.abs(nu.username.charCodeAt(0)||0)%5];
+      onLogin({...nu,token:j.token,initials,avatarColor});
+    }catch(_){ setErr("Could not reach EcoScope. Please try again."); setBusy(false); } };
+  const inp={width:"100%",boxSizing:"border-box",background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"10px 12px",fontSize:14,fontFamily:C.font,marginBottom:12};
+  const lab={color:C.mid,fontSize:11,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6,display:"block"};
+  return(
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:C.font}}>
+      <form onSubmit={go} style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:10,padding:"32px 36px",width:"100%",maxWidth:420}}>
+        <h1 style={{color:C.text,fontSize:20,margin:"0 0 6px"}}>Welcome to EcoScope</h1>
+        {!info&&!err&&<p style={{color:C.mid,fontSize:13}}>Checking your invitation…</p>}
+        {info&&<p style={{color:C.mid,fontSize:13,margin:"0 0 18px"}}>You were invited as <b style={{color:C.text}}>{info.email}</b>. Choose a username and password to finish.</p>}
+        {info&&<>
+          <label style={lab} htmlFor="inv-u">Username</label><input id="inv-u" autoComplete="username" value={u} onChange={e=>setU(e.target.value)} style={inp}/>
+          <label style={lab} htmlFor="inv-p">Password</label><input id="inv-p" type="password" autoComplete="new-password" value={p} onChange={e=>setP(e.target.value)} style={inp}/>
+          {p&&pwErrs.length>0&&<div style={{color:C.dim,fontSize:11,marginTop:-6,marginBottom:10}}>{pwErrs.join(" · ")}</div>}
+          <label style={lab} htmlFor="inv-p2">Confirm password</label><input id="inv-p2" type="password" autoComplete="new-password" value={p2} onChange={e=>setP2(e.target.value)} style={inp}/>
+          <button type="submit" disabled={busy} style={{...btn(),width:"100%",padding:"11px",marginTop:4}}>{busy?"Setting up…":"Create my account →"}</button>
+        </>}
+        {err&&<div role="alert" style={{color:C.red,fontSize:13,marginTop:12}}>{err}</div>}
+        <button type="button" onClick={onCancel} style={{background:"none",border:"none",color:C.teal,fontSize:12,marginTop:16,cursor:"pointer",padding:0}}>Go to sign in</button>
+      </form>
+    </div>);
+}
+
 function Login({onLogin, notice=""}){
   const [mode,setMode]=useState("login");
   const [u,setU]=useState(""); const [email,setEmail]=useState("");
@@ -12965,6 +12999,8 @@ export default function App() {
   const [user,setUser]=useState(null);
   const [booting,setBooting]=useState(true);
   const [expired,setExpired]=useState(false);
+  const [invite,setInvite]=useState(()=>{ try { const v=new URLSearchParams(window.location.search).get("invite"); return v&&/^[a-f0-9]{40}$/.test(v)?v:null; } catch(e){ return null; } });
+  const clearInvite=()=>{ try { const url=new URL(window.location.href); url.searchParams.delete("invite"); window.history.replaceState(null,"",url.pathname+url.search+url.hash); } catch(e){} setInvite(null); };
   useEffect(()=>{ const f=()=>{ localStorage.removeItem(US.SESS); setUser(null); setExpired(true); }; window.addEventListener('ecoscope-auth-expired',f); return ()=>window.removeEventListener('ecoscope-auth-expired',f); },[]);
 
   useEffect(()=>{
@@ -12987,6 +13023,7 @@ export default function App() {
       <div style={{color:C.gold,fontFamily:"monospace",fontSize:14}}>◈ Loading EcoScope…</div>
     </div>
   );
+  if(!user && invite) return <AcceptInvite token={invite} onCancel={clearInvite} onLogin={u=>{const nu={...u,role:u.role||"user"};localStorage.setItem(US.SESS,JSON.stringify({username:nu.username,role:nu.role,plan:nu.plan,token:nu.token,at:new Date().toISOString()}));clearInvite();setUser(nu);}}/>;
   if(!user) return <Login notice={expired? "Your session has ended. Please sign in again." : ""} onLogin={u=>{const nu={...u,role:u.role||(u.username==="admin"?"admin":"user")};localStorage.setItem(US.SESS,JSON.stringify(nu));setExpired(false);setUser(nu);}}/>;
   if(user.role==="admin"||user.username==="admin") return <AdminPanel user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/>;
   return <ErrBoundary><Dashboard user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/></ErrBoundary>;
@@ -13051,7 +13088,7 @@ function InviteModal({onClose,onDone}){
               <div style={{color:C.text,fontSize:11,fontFamily:C.mono,wordBreak:'break-all',marginBottom:10}}>{inviteLink}</div>
               <button onClick={()=>{ try { (navigator.clipboard? navigator.clipboard.writeText(inviteLink) : Promise.reject()).catch(()=>window.prompt("Copy this invite link:", inviteLink)); } catch(e){ window.prompt("Copy this invite link:", inviteLink); } }} style={{background:C.gold,color:'#000',border:'none',borderRadius:6,padding:'7px 16px',fontSize:11,fontWeight:700,cursor:'pointer'}}><Ico n="clipboard"/> Copy Link</button>
             </div>
-            <div style={{color:C.dim,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>Share this link with {email}. They can use it to log in — their account is ready.</div>
+            <div style={{color:C.dim,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>Share this link with {email}. They open it, choose a username and password, and are signed in. The link works once and expires in 14 days.</div>
             <button onClick={onClose} style={{...btn(),width:'100%',marginTop:14,padding:'10px',fontSize:12}}>Done</button>
           </div>
         ):(

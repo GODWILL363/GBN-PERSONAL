@@ -148,8 +148,8 @@ app.delete("/api/users/:username", async (req, res) => {
 
 // Invite user
 app.post("/api/users/invite", async (req, res) => {
-  const { email, role = "user" } = req.body;
-  if (!email) return res.status(400).json({ error: "Email required" });
+  const email = String(req.body?.email || "").trim().toLowerCase(); const role = req.body?.role === "admin" ? "admin" : "user";
+  if (!/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
   try {
     const existing = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${encodeURIComponent(email)}&select=id`);
     if (Array.isArray(existing) && existing.length > 0) return res.status(409).json({ error: "Email already registered" });

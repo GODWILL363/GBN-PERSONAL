@@ -19,7 +19,12 @@ const DATA_MAX = 20 * 1024 * 1024;
 const META = "id,title,description,categories,source_name,source_url,citation,license,coverage,notes,audience,allow_download,published,n_rows,n_cols,size_bytes,created_at,updated_at,updated_by,published_at,iesgi,current_version";
 const FILE_META = "id,dataset_id,name,mime,kind,note,size_bytes,created_at,uploaded_by";
 
-module.exports = function registerLibrary(app, { sbFetch }) {
+module.exports = function registerLibrary(app, { sbFetch, blobs }) {
+  // file bytes go to Supabase Storage when it is available; rows keep only metadata and the storage path
+  const BLOB = blobs || require("./blob_store")();
+  const stash = async (row, path, buf) => { if (BLOB.enabled) { try { await BLOB.put(path, buf, row.mime); row.storage_path = path; row.data = null; return row; } catch (e) { console.error("[library] storage upload failed, keeping the file in the database:", e.message); } }
+    row.data = buf.toString("base64"); return row; };
+  const bytesOf = async (f) => (f.storage_path ? BLOB.get(f.storage_path) : Buffer.from(f.data || "", "base64"));
   const enc = encodeURIComponent; const clean = (s, n) => String(s ?? "").trim().slice(0, n);
   const deny = (res, code, msg, kind) => res.status(code).json({ error: msg, code: kind });
   const bad = (r) => !Array.isArray(r);
@@ -92,7 +97,7 @@ module.exports = function registerLibrary(app, { sbFetch }) {
       if (!d || !visible(d, s, u)) return deny(res, 404, "This document is not available on your plan.", "not_found");
       const r = await sbFetch("GET", "ecoscope_library_files", null, `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(d.id)}&select=*`); const f = Array.isArray(r) && r[0];
       if (!f) return deny(res, 404, "Document not found.", "not_found");
-      const buf = Buffer.from(f.data || "", "base64"); res.setHeader("Content-Type", f.mime || "application/octet-stream"); res.setHeader("Content-Length", buf.length);
+      const buf = await bytesOf(f); res.setHeader("Content-Type", f.mime || "application/octet-stream"); res.setHeader("Content-Length", buf.length);
       res.setHeader("Content-Disposition", `${req.query.inline ? "inline" : "attachment"}; filename*=UTF-8''${enc(f.name)}`); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, no-store");
       res.end(buf);
     } catch (e) { fail(res, e); } });
@@ -133,6 +138,7 @@ module.exports = function registerLibrary(app, { sbFetch }) {
   app.delete("/api/admin/library/:id", async (req, res) => {
     if (!adminOnly(req, res)) return;
     try { const d = await one(req.params.id, "id,title"); if (!d) return deny(res, 404, "Dataset not found.", "not_found");
+      const fl = await sbFetch("GET", "ecoscope_library_files", null, `?dataset_id=eq.${enc(d.id)}&select=storage_path`); await BLOB.del((Array.isArray(fl) ? fl : []).map(f => f.storage_path));
       await sbFetch("DELETE", "ecoscope_library_files", null, `?dataset_id=eq.${enc(d.id)}`); await sbFetch("DELETE", "ecoscope_library", null, `?id=eq.${enc(d.id)}`);
       await logAct(req.auth.username, "Vault dataset deleted", d.title); res.json({ ok: true });
     } catch (e) { fail(res, e); } });
@@ -143,16 +149,18 @@ module.exports = function registerLibrary(app, { sbFetch }) {
       const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]); if (!buf.length) return deny(res, 400, "The file is empty.", "bad_request");
       if (buf.length > FILE_MAX) return deny(res, 413, `Each document can be up to ${FILE_MAX / 1048576} MB.`, "too_large");
       const name = clean(req.query.name, 200).replace(/[\\/:*?"<>|\r\n]+/g, "_") || "document"; const mime = clean(req.query.type, 120).replace(/[^\w.+\/-]/g, "") || "application/octet-stream";
-      const row = { id: crypto.randomUUID(), dataset_id: d.id, name, mime, kind: kindOf(name, mime), note: clean(req.query.note, 500) || null, size_bytes: buf.length, data: buf.toString("base64"), created_at: new Date().toISOString(), uploaded_by: req.auth.username };
-      const out = await sbFetch("POST", "ecoscope_library_files", row); if (bad(out)) throw new Error(JSON.stringify(out).slice(0, 200));
-      await logAct(req.auth.username, "Vault document added", `${name} → ${d.title}`); const { data, ...m } = row; res.json(m);
+      const row = { id: crypto.randomUUID(), dataset_id: d.id, name, mime, kind: kindOf(name, mime), note: clean(req.query.note, 500) || null, size_bytes: buf.length, data: null, created_at: new Date().toISOString(), uploaded_by: req.auth.username };
+      await stash(row, `vault/${d.id}/${row.id}`, buf);
+      const out = await sbFetch("POST", "ecoscope_library_files", row); if (bad(out) && row.storage_path) await BLOB.del(row.storage_path); if (bad(out)) throw new Error(JSON.stringify(out).slice(0, 200));
+      await logAct(req.auth.username, "Vault document added", `${name} → ${d.title}`); const { data, storage_path, ...m } = row; res.json(m);
     } catch (e) { fail(res, e, "the document store"); } });
   app.patch("/api/admin/library/:id/files/:fid", async (req, res) => {
     if (!adminOnly(req, res)) return;
     try { await sbFetch("PATCH", "ecoscope_library_files", { note: clean(req.body?.note, 500) || null }, `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(req.params.id)}`); res.json({ ok: true }); } catch (e) { fail(res, e); } });
   app.delete("/api/admin/library/:id/files/:fid", async (req, res) => {
     if (!adminOnly(req, res)) return;
-    try { await sbFetch("DELETE", "ecoscope_library_files", null, `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(req.params.id)}`); res.json({ ok: true }); } catch (e) { fail(res, e); } });
+    try { const q = `?id=eq.${enc(req.params.fid)}&dataset_id=eq.${enc(req.params.id)}`; const f = await sbFetch("GET", "ecoscope_library_files", null, `${q}&select=storage_path`);
+      if (Array.isArray(f) && f[0] && f[0].storage_path) await BLOB.del(f[0].storage_path); await sbFetch("DELETE", "ecoscope_library_files", null, q); res.json({ ok: true }); } catch (e) { fail(res, e); } });
   // ══════════════ ADMIN STORAGE: raw files and work-in-progress tables, never shown to users ══════════════
   const ST_META = "id,name,kind,mime,folder,note,size_bytes,n_rows,n_cols,created_at,updated_at,updated_by";
   const stOne = async (id, cols = ST_META) => { const r = await sbFetch("GET", "ecoscope_library_storage", null, `?id=eq.${enc(id)}&select=${cols}`); return Array.isArray(r) && r[0] ? r[0] : null; };
@@ -174,16 +182,17 @@ module.exports = function registerLibrary(app, { sbFetch }) {
     try { const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from([]); if (!buf.length) return deny(res, 400, "The file is empty.", "bad_request");
       if (buf.length > FILE_MAX) return deny(res, 413, `Each file can be up to ${FILE_MAX / 1048576} MB.`, "too_large");
       const name = clean(req.query.name, 200).replace(/[\\/:*?"<>|\r\n]+/g, "_") || "file"; const mime = clean(req.query.type, 120).replace(/[^\w.+\/-]/g, "") || "application/octet-stream"; const now = new Date().toISOString();
-      const row = { id: crypto.randomUUID(), name, kind: kindOf(name, mime), mime, folder: clean(req.query.folder, 80) || null, note: clean(req.query.note, 500) || null, size_bytes: buf.length, n_rows: null, n_cols: null, table_data: null, data: buf.toString("base64"), created_at: now, updated_at: now, updated_by: req.auth.username };
+      const row = { id: crypto.randomUUID(), name, kind: kindOf(name, mime), mime, folder: clean(req.query.folder, 80) || null, note: clean(req.query.note, 500) || null, size_bytes: buf.length, n_rows: null, n_cols: null, table_data: null, data: null, created_at: now, updated_at: now, updated_by: req.auth.username };
+      await stash(row, `storage/${row.id}`, buf);
       const out = await sbFetch("POST", "ecoscope_library_storage", row); if (bad(out)) throw new Error(JSON.stringify(out).slice(0, 200));
-      await logAct(req.auth.username, "Storage: file saved", name); const { table_data, data, ...m } = row; res.json(m);
+      await logAct(req.auth.username, "Storage: file saved", name); const { table_data, data, storage_path, ...m } = row; res.json(m);
     } catch (e) { fail(res, e, "admin storage"); } });
   // open: a table comes back as JSON, a file as its bytes
   app.get("/api/admin/library-storage/:id", async (req, res) => {
     if (!adminOnly(req, res)) return;
     try { const it = await stOne(req.params.id, "*"); if (!it) return deny(res, 404, "Not found in storage.", "not_found");
       if (it.kind === "table") { const { data, ...m } = it; return res.json(m); }
-      const buf = Buffer.from(it.data || "", "base64"); res.setHeader("Content-Type", it.mime || "application/octet-stream"); res.setHeader("Content-Length", buf.length);
+      const buf = await bytesOf(it); res.setHeader("Content-Type", it.mime || "application/octet-stream"); res.setHeader("Content-Length", buf.length);
       res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${enc(it.name)}`); res.setHeader("X-Content-Type-Options", "nosniff"); res.setHeader("Cache-Control", "private, no-store"); res.end(buf);
     } catch (e) { fail(res, e, "admin storage"); } });
   app.patch("/api/admin/library-storage/:id", big, async (req, res) => {
@@ -195,8 +204,21 @@ module.exports = function registerLibrary(app, { sbFetch }) {
     } catch (e) { if (e.http) return deny(res, e.http, e.message, "bad_request"); fail(res, e, "admin storage"); } });
   app.delete("/api/admin/library-storage/:id", async (req, res) => {
     if (!adminOnly(req, res)) return;
-    try { const it = await stOne(req.params.id, "id,name"); if (!it) return deny(res, 404, "Not found in storage.", "not_found"); await sbFetch("DELETE", "ecoscope_library_storage", null, `?id=eq.${enc(it.id)}`);
+    try { const it = await stOne(req.params.id, "id,name,storage_path"); if (!it) return deny(res, 404, "Not found in storage.", "not_found"); if (it.storage_path) await BLOB.del(it.storage_path); await sbFetch("DELETE", "ecoscope_library_storage", null, `?id=eq.${enc(it.id)}`);
       await logAct(req.auth.username, "Storage: deleted", it.name); res.json({ ok: true }); } catch (e) { fail(res, e, "admin storage"); } });
+
+  // move files still held in the database into Storage, 25 at a time (call again until "remaining" is 0)
+  app.post("/api/admin/library-storage/migrate-files", async (req, res) => {
+    if (!adminOnly(req, res)) return; if (!BLOB.enabled) return deny(res, 400, "Storage is turned off (VAULT_STORAGE=off) or Supabase is not configured.", "bad_request");
+    try { let moved = 0, failed = 0;
+      for (const [table, prefix] of [["ecoscope_library_files", (r) => `vault/${r.dataset_id}/${r.id}`], ["ecoscope_library_storage", (r) => `storage/${r.id}`]]) {
+        const list = await sbFetch("GET", table, null, `?storage_path=is.null&data=not.is.null&select=id,${table === "ecoscope_library_files" ? "dataset_id," : ""}mime,data&limit=25`); if (bad(list)) throw new Error(JSON.stringify(list).slice(0, 200));
+        for (const r of list) { try { const path = prefix(r); await BLOB.put(path, Buffer.from(r.data || "", "base64"), r.mime);
+            await sbFetch("PATCH", table, { storage_path: path, data: null }, `?id=eq.${enc(r.id)}`); moved++; } catch (e) { failed++; console.error("[library] migrate", r.id, e.message); } } }
+      const left = async (t) => { const r = await sbFetch("GET", t, null, "?storage_path=is.null&data=not.is.null&select=id"); return Array.isArray(r) ? r.length : 0; };
+      const remaining = (await left("ecoscope_library_files")) + (await left("ecoscope_library_storage"));
+      if (moved) await logAct(req.auth.username, "Storage: files moved", `${moved} moved to Supabase Storage, ${remaining} left`); res.json({ moved, failed, remaining, bucket: BLOB.bucket });
+    } catch (e) { fail(res, e, "admin storage"); } });
 
   app.patch("/api/admin/library-settings", async (req, res) => {
     if (!adminOnly(req, res)) return;

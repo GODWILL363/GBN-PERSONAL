@@ -24,7 +24,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
 
   // ── 1. Attach a token to successful sign-in / registration responses ──
   app.use((req, res, next) => {
-    if (req.method === "POST" && (req.path === "/api/auth/login" || req.path === "/api/auth/register")) {
+    if (req.method === "POST" && (req.path === "/api/auth/login" || req.path === "/api/auth/register" || req.path === "/api/auth/accept-invite")) {
       const json = res.json.bind(res);
       res.json = (body) => { if (res.statusCode < 300 && body && body.user && body.user.username) body.token = issue(body.user); return json(body); };
     }
@@ -52,7 +52,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
   const forgetUser = (username) => LIVE.delete(username);
 
   // ── 3. Route rules ──
-  const PUBLIC = [["POST", /^\/api\/auth\/(login|register)$/], ["GET", /^\/api\/health$/], ["GET", /^\/api\/proxy-data$/]];
+  const PUBLIC = [["POST", /^\/api\/auth\/(login|register|accept-invite)$/], ["GET", /^\/api\/auth\/invite\/[a-f0-9]{40}$/], ["GET", /^\/api\/health$/], ["GET", /^\/api\/proxy-data$/]];
   const ADMIN = [["GET", /^\/api\/users$/], ["DELETE", /^\/api\/users\/[^/]+$/], ["POST", /^\/api\/users\/invite$/], ["POST", /^\/api\/users\/[^/]+\/plan$/],
                  ["GET", /^\/api\/activity$/], ["GET", /^\/api\/requests$/], ["PATCH", /^\/api\/requests\/[^/]+$/], ["GET", /^\/api\/support\/threads$/], ["POST", /^\/api\/support\/status$/]];
   const deny = (res, code, msg, kind) => res.status(code).json({ error: msg, code: kind });
@@ -120,7 +120,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
 
   // ── sign-in guard: 10 failed attempts per username or per address lock that key for 15 minutes ──
   const FAILS = new Map(); const LOCK_N = 10, LOCK_MS = 15 * 60e3;
-  const locked = (k) => { const f = FAILS.get(k); return !!f && Date.now() - f.t < LOCK_MS && f.n >= LOCK_N; };
+  const locked = (k) => { const f = FAILS.get(k); return !!f && Date.now() - f.t < LOCK_MS && f.n >= (k.startsWith("i:") ? 30 : LOCK_N); }; // 10 per username, 30 per address (shared connections)
   const failed = (k) => { const f = FAILS.get(k); if (!f || Date.now() - f.t >= LOCK_MS) FAILS.set(k, { t: Date.now(), n: 1 }); else f.n++; if (FAILS.size > 20000) FAILS.clear(); };
   const BAD_LOGIN = "Incorrect username or password.";
   app.post("/api/auth/login", async (req, res) => {
@@ -145,6 +145,28 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
     } catch (e) { console.error("[account] login:", e.message); res.status(500).json({ error: "Sign-in failed. Please try again." }); } });
 
   // update my account: email, country, display name, organisation (username and plan cannot change here)
+  // ── invitations: an admin creates the account (plan_status "invited"); the person opens /?invite=<token>,
+  //    chooses a username and password, and is signed in. Links expire after 14 days and work once. ──
+  const INVITE_DAYS = 14;
+  const invited = async (token) => { if (!/^[a-f0-9]{40}$/.test(String(token || ""))) return null;
+    const u = await one(`?invite_token=eq.${token}&plan_status=eq.invited&select=id,username,email,role,created_at`);
+    if (!u || (u.created_at && Date.now() - new Date(u.created_at).getTime() > INVITE_DAYS * 864e5)) return null; return u; };
+  app.get("/api/auth/invite/:token", async (req, res) => {
+    try { const u = await invited(req.params.token); if (!u) return res.status(404).json({ error: "This invitation link is not valid or has expired. Ask the administrator for a new one." });
+      res.json({ email: u.email, role: u.role === "admin" ? "admin" : "user" }); } catch (e) { console.error("[invite] look up:", e.message); res.status(500).json({ error: "Could not check the invitation. Please try again." }); } });
+  app.post("/api/auth/accept-invite", async (req, res) => {
+    try { const b = req.body || {}; const u = await invited(b.token); if (!u) return res.status(404).json({ error: "This invitation link is not valid or has expired. Ask the administrator for a new one." });
+      const username = clean(b.username, 40), password = String(b.password || "");
+      if (!/^[A-Za-z0-9_.-]{3,40}$/.test(username)) return res.status(400).json({ error: "Username: 3 to 40 letters, numbers, dots, dashes or underscores." });
+      if (!strong(password)) return res.status(400).json({ error: PW_RULE });
+      if (await one(`?username=ilike.${enc(username.replace(/[%_\\]/g, "\\$&"))}&select=id`)) return res.status(409).json({ error: "Username already taken." });
+      const now = new Date().toISOString();
+      const upd = await sbFetch("PATCH", "ecoscope_users", { username, password_hash: await hashPw(password), plan_status: "active", invite_token: null, last_login: now }, `?id=eq.${enc(u.id)}&plan_status=eq.invited`);
+      const nu = Array.isArray(upd) ? upd[0] : null; if (!nu) return res.status(409).json({ error: "This invitation was already used." });
+      forgetUser(u.username); await logAct(username, "Invitation accepted", `Account set up · ${u.email}`, req.ip);
+      const { password_hash, invite_token, ...safe } = nu; res.json({ user: safe });
+    } catch (e) { console.error("[invite] accept:", e.message); res.status(500).json({ error: "Could not finish setting up the account. Please try again." }); } });
+
   app.patch("/api/account", async (req, res) => {
     try { const me = req.auth.username; const u = await one(`?username=eq.${enc(me)}&select=${USER_COLS}`); if (!u) return deny(res, 404, "Account not found.", "not_found");
       const b = req.body || {}; const upd = {}; const changed = [];
