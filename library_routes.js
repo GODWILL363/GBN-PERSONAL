@@ -214,7 +214,8 @@ module.exports = function registerLibrary(app, { sbFetch, blobs }) {
       for (const [table, prefix] of [["ecoscope_library_files", (r) => `vault/${r.dataset_id}/${r.id}`], ["ecoscope_library_storage", (r) => `storage/${r.id}`]]) {
         const list = await sbFetch("GET", table, null, `?storage_path=is.null&data=not.is.null&select=id,${table === "ecoscope_library_files" ? "dataset_id," : ""}mime,data&limit=25`); if (bad(list)) throw new Error(JSON.stringify(list).slice(0, 200));
         for (const r of list) { try { const path = prefix(r); await BLOB.put(path, Buffer.from(r.data || "", "base64"), r.mime);
-            await sbFetch("PATCH", table, { storage_path: path, data: null }, `?id=eq.${enc(r.id)}`); moved++; } catch (e) { failed++; console.error("[library] migrate", r.id, e.message); } } }
+            const up = await sbFetch("PATCH", table, { storage_path: path, data: null }, `?id=eq.${enc(r.id)}`);
+            if (bad(up) || !up.length) throw new Error(`database refused the update: ${JSON.stringify(up).slice(0, 160)}`); moved++; } catch (e) { failed++; console.error("[library] migrate", r.id, e.message); } } }
       const left = async (t) => { const r = await sbFetch("GET", t, null, "?storage_path=is.null&data=not.is.null&select=id"); return Array.isArray(r) ? r.length : 0; };
       const remaining = (await left("ecoscope_library_files")) + (await left("ecoscope_library_storage"));
       if (moved) await logAct(req.auth.username, "Storage: files moved", `${moved} moved to Supabase Storage, ${remaining} left`); res.json({ moved, failed, remaining, bucket: BLOB.bucket });
