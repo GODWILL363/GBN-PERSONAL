@@ -2,22 +2,19 @@
 import { ecoTimeCmp } from "../ui/login";
 
 const isNum = (v) => v != null && v !== "" && isFinite(v);
-// "2004" -> "9999", "2004-03" -> "9999-99", "2004Q1" -> "9999Q9": series are only padded when they use the same kind of period
-const periodShape = (y) => String(y).trim().replace(/\d/g, "9");
+// one key per period: 2004, "2004", " 2004 " and "2004.0" are the same year
+const normYear = (y) => { const t = String(y ?? "").trim(); return /^\d{4}(\.0+)?$/.test(t) ? parseInt(t, 10) : t; };
 
 // Give every series an entry (value null) for each period any series in the list has, so gaps are visible and can be imputed.
-// Series that are empty, or that use a different kind of period (years next to months), are left as they are.
+// This is the same set of periods the table shows, so the missing-data notice always agrees with the table. Empty series stay empty.
 export const ecoPadSeries = (list) => {
-  const arrs = (list || []).map((a) => (Array.isArray(a) ? a : []));
-  const shapes = new Set(); arrs.forEach((a) => a.forEach((d) => shapes.add(periodShape(d.year))));
-  if (shapes.size !== 1) return arrs;
+  const arrs = (list || []).map((a) => (Array.isArray(a) ? a.filter((d) => d && d.year != null && String(d.year).trim() !== "").map((d) => ({ ...d, year: normYear(d.year) })) : []));
   const all = [...new Set(arrs.flatMap((a) => a.map((d) => String(d.year))))].sort(ecoTimeCmp);
   if (!all.length) return arrs;
   return arrs.map((a) => {
     if (!a.length) return a;
-    const by = new Map(a.map((d) => [String(d.year), d]));
-    const numeric = typeof a[0].year === "number";
-    return all.map((y) => by.get(y) || { year: numeric && /^\d+$/.test(y) ? +y : y, value: null });
+    const by = new Map(); a.forEach((d) => { const k = String(d.year); const e = by.get(k); if (!e || (e.value == null && d.value != null)) by.set(k, d); });
+    return all.map((y) => by.get(y) || { year: normYear(y), value: null });
   });
 };
 

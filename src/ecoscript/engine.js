@@ -6,7 +6,7 @@ import { meChi2Pval, meDot, meFPval, meInvNorm, meLnGamma, meMV, meMatMul, meNor
 // n: [min, max] arguments · g: group · d: what it does · ex: example · xl: Excel names that do the same · hide: Excel-only spelling (not listed)
 const FX_FUNCS = {
   // ── Maths and rounding ──
-  round_to: { n:[1,2], g:0, d:"Round to a number of decimals (half away from zero, like Excel)", ex:"round_to(rate, 2)", xl:["ROUND"] },
+  round_to: { n:[1,2], g:0, d:"Round to a number of decimals (half away from zero)", ex:"round_to(rate, 2)", xl:["ROUND"] },
   round_up: { n:[1,2], g:0, d:"Round away from zero to a number of decimals", ex:"round_up(price, 0)", xl:["ROUNDUP"] },
   round_down: { n:[1,2], g:0, d:"Cut off decimals without rounding", ex:"round_down(age, 0)", xl:["ROUNDDOWN","TRUNC"] },
   round_to_multiple: { n:[2,2], g:0, d:"Round to the nearest multiple", ex:"round_to_multiple(price, 5)", xl:["MROUND"] },
@@ -21,7 +21,7 @@ const FX_FUNCS = {
   square_root: { n:[1,1], g:0, d:"Square root", ex:"square_root(area)", xl:["SQRT"] },
   absolute: { n:[1,1], g:0, d:"Value without its minus sign", ex:"absolute(balance)", xl:["ABS"] },
   sign_of: { n:[1,1], g:0, d:"1 if positive, −1 if negative, 0 if zero", ex:"sign_of(change)", xl:["SIGN"] },
-  log: { n:[1,2], g:0, d:"Natural log; log(x, 10) for base 10. (Excel's LOG is base 10: use log10)", ex:"log(gdp)" },
+  log: { n:[1,2], g:0, d:"Natural log; log(x, 10) or log10(x) for base 10", ex:"log(gdp)" },
   ln: { n:[1,1], g:0, d:"Natural log", ex:"ln(gdp)", xl:["LN"] },
   log10: { n:[1,1], g:0, d:"Base-10 log", ex:"log10(population)", xl:["LOG10"] },
   exp: { n:[1,1], g:0, d:"e to the power x", ex:"exp(log_gdp)", xl:["EXP"] },
@@ -45,7 +45,7 @@ const FX_FUNCS = {
   slope_against_row: { n:[3,201], g:1, d:"Trend of each row against a fixed row of the same columns (e.g. the row that holds the years): (row number, columns…)", ex:"slope_against_row(1, col3, col5, col7, col9)", xl:["SLOPE(B3:M3, $B$2:$M$2)"] },
   r_squared_against_row: { n:[3,201], g:1, d:"How well that line fits each row (0 to 1): (row number, columns…)", ex:"r_squared_against_row(1, col3, col5, col7)", xl:["RSQ(B3:M3, $B$2:$M$2)"] },
   r_squared_across: { n:[3,200], g:1, d:"How well that straight line fits each row (0 to 1)", ex:"r_squared_across(col2, col4, col6, col8)", xl:["RSQ(row of values, row of years)"] },
-  first_filled: { n:[2,200], g:1, d:"First value that is not blank", ex:"first_filled(gdp_wb, gdp_imf)", xl:["(no Excel name)"] },
+  first_filled: { n:[2,200], g:1, d:"First value that is not blank", ex:"first_filled(gdp_wb, gdp_imf)" },
   // ── Whole-column statistics (within each unit when one is chosen) ──
   column_average: { n:[1,1], g:2, d:"Average of the whole column (same value in every row)", ex:"income - column_average(income)", xl:["AVERAGE (one column)"] },
   column_total: { n:[1,1], g:2, d:"Total of the whole column", ex:"sales / column_total(sales) * 100", xl:["SUM (one column)"] },
@@ -135,7 +135,7 @@ const FX_FUNCS = {
   month: { n:[1,1], g:6, d:"Month number (1 to 12)", ex:"month(date)", xl:["MONTH"] },
   quarter: { n:[1,1], g:6, d:"Quarter (1 to 4)", ex:"quarter(date)" },
   day_of_month: { n:[1,1], g:6, d:"Day of the month (1 to 31)", ex:"day_of_month(date)", xl:["DAY"] },
-  weekday_number: { n:[1,1], g:6, d:"Day of the week, Monday = 1 … Sunday = 7", ex:"weekday_number(date)", xl:["WEEKDAY (Excel counts Sunday = 1)"] },
+  weekday_number: { n:[1,1], g:6, d:"Day of the week, Monday = 1 … Sunday = 7", ex:"weekday_number(date)", xl:["WEEKDAY"] },
   weekday_name: { n:[1,1], g:6, d:"Monday, Tuesday, …", ex:"weekday_name(date)" },
   month_name: { n:[1,1], g:6, d:"January, February, …", ex:"month_name(date)" },
   week_number: { n:[1,1], g:6, d:"Week of the year (ISO weeks start on Monday)", ex:"week_number(date)", xl:["ISOWEEKNUM","WEEKNUM"] },
@@ -314,7 +314,7 @@ const fxEval = (ast, ctx) => { const n = ctx.n;
     pct: (a, q) => { const f = nums(a).sort((x, y) => x - y); if (!f.length || !(q >= 0 && q <= 1)) return NaN; const h = (f.length - 1) * q, lo = Math.floor(h); return f[lo] + (f[Math.min(lo + 1, f.length - 1)] - f[lo]) * (h - lo); },
     product: (a) => { const f = nums(a); return f.length ? f.reduce((s, v) => s * v, 1) : NaN; } };
   const colRaw = (name) => { if (name in ctx.cols) return ctx.cols[name]; const hit = Object.keys(ctx.cols).find(k => k.toLowerCase() === String(name).toLowerCase()); if (hit) return ctx.cols[hit];
-    if (/^[A-Z]{1,3}\d+$/i.test(name)) throw new Error(`"${name}" looks like an Excel cell. Here you write the column name instead (for example gdp), and the formula works on every row.`);
+    if (/^[A-Z]{1,3}\d+$/i.test(name)) throw new Error(`"${name}" looks like a cell reference. Here you write the column name instead (for example gdp), and the formula works on every row.`);
     const close = Object.keys(ctx.cols).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, "") === String(name).toLowerCase().replace(/[^a-z0-9]/g, ""));
     throw new Error(`No column called "${name}".${close ? ` Did you mean [${close}]?` : " Click a column name above the box to insert it exactly."}`); };
   const nameOf = (a) => a.t === "col" ? a.v : a.t === "str" ? a.v : null;
@@ -659,9 +659,11 @@ const fxRunCore = (table, text, opts = {}) => {
   const LINES = fxExpandLoops(text, headers);
   const body = (raw, li) => { if (/^\s*(\*|\/\/)/.test(raw)) return; if (raw.startsWith("__err:")) { results.push({ line: li + 1, ok: false, error: raw.slice(6) }); return; } const line = fxStripComment(raw).trim(); if (!line) return;
     let m;
-    if ((m = line.match(/^to_([A-Za-z][A-Za-z0-9_]*)(?:\s+(.*)|\s*(,.*))?$/s)) && (m[2] = m[2] || m[3] || "", true) && !/^\s*=(?!=)/.test(m[2] || "") && (ST_CMDS[m[1].toLowerCase()] || ST_ALIAS[m[1].toLowerCase()] || !(fxFuncName(m[0].split("(")[0]) && /\(/.test(line)))) {
-      try { const o = stRun(m[1].toLowerCase(), (m[2] || "").trim(), S, li + 1); if (o.iter) { pending = { o, li }; return; } outs.push(o); results.push({ line: li + 1, ok: true, cmd: true, stata: true, msg: `to_${o.cmd}: ${o.msg || "see Results"}` }); }
-      catch (e) { results.push({ line: li + 1, ok: false, error: e.message }); } return; }
+    const runSt = (nm, rest) => { try { const o = stRun(nm.toLowerCase(), (rest || "").trim(), S, li + 1); if (o.iter) { pending = { o, li }; return; } outs.push(o); results.push({ line: li + 1, ok: true, cmd: true, stata: true, msg: `to_${o.cmd}: ${o.msg || "see Results"}` }); }
+      catch (e) { results.push({ line: li + 1, ok: false, error: e.message }); } };
+    if ((m = line.match(/^to_([A-Za-z][A-Za-z0-9_]*)(?:\s+(.*)|\s*(,.*))?$/is)) && (m[2] = m[2] || m[3] || "", true) && !/^\s*=(?!=)/.test(m[2] || "") && (ST_CMDS[m[1].toLowerCase()] || ST_ALIAS[m[1].toLowerCase()] || !(fxFuncName(m[0].split("(")[0]) && /\(/.test(line)))) { runSt(m[1], m[2]); return; }
+    // the same commands written the Stata way, without to_ (reg y x, twoway scatter y x, graph bar y, over(g), ivregress 2sls ...)
+    if (!FX_CMD_COLS.test(line) && !FX_CMD_HDR.test(line) && !FX_CMD_ROWS.test(line) && !/^(drop|delete|remove|keep)\s+rows?\b/i.test(line) && !(/^rename\s/i.test(line) && /\s(to|as)\s|->|=>/i.test(line))) { const b = stBare(line); if (b) { runSt(b.name, b.rest); return; } }
     if ((m = line.match(FX_CMD_COLS))) { const keep = m[1].toLowerCase() === "keep"; const names = fxNameList(m[5]); const found = [], missing = [];
       names.forEach(nm => { const h = findCol(nm); if (h) { if (!found.includes(h)) found.push(h); } else missing.push(nm); });
       if (missing.length) { results.push({ line: li + 1, ok: false, error: `No column called ${missing.map(x => `"${x}"`).join(", ")}. Separate names with commas; click a column name above the box to insert it exactly.` }); return; }
@@ -799,14 +801,35 @@ const stKeepCols = (X) => { const k = X[0] ? X[0].length : 0; const G = meZeros(
     const g = keep.map(a => G[a][j]); let q = 0; for (let a = 0; a < keep.length; a++) for (let b = 0; b < keep.length; b++) q += g[a] * inv[a][b] * g[b]; if (G[j][j] - q > 1e-9 * G[j][j]) keep.push(j); }
   return keep; };
 // ── the command runner. S: state from fxRun ──
+// "y x1 (x2 = z1 z2) x3" -> [whole, "y x1 ", "x2 ", " z1 z2", " x3"]: the first ( ) group outside [names] and quotes that holds "="
+const stIvSplit = (txt) => { let q = null, d = 0, a = -1; for (let i = 0; i < txt.length; i++) { const c = txt[i]; if (q) { if (c === q) q = null; continue; } if (c === "[") { q = "]"; continue; } if (c === '"' || c === "'" || c === "`") { q = c; continue; }
+    if (c === "(") { if (d === 0) a = i; d++; } else if (c === ")" && d > 0) { d--; if (d === 0 && a >= 0) { const inner = txt.slice(a + 1, i); let e = -1, qq = null, dd = 0; for (let k = 0; k < inner.length; k++) { const ch = inner[k]; if (qq) { if (ch === qq) qq = null; continue; } if (ch === "[") { qq = "]"; continue; } if (ch === "(") dd++; else if (ch === ")") dd--; else if (ch === "=" && dd === 0) { e = k; break; } }
+      if (e >= 0) return [txt, txt.slice(0, a), inner.slice(0, e), inner.slice(e + 1), txt.slice(i + 1)]; a = -1; } } } return null; };
+// a Stata-style line without the to_ prefix -> { name, rest }, or null when the first word is not a command (formulas such as  gdp_pc = gdp / pop  stay formulas)
+const stBare = (line) => { let s = line.replace(/^(quietly|qui|noisily|noi|capture|cap)\s*:?\s+/i, "").replace(/^xi\s*:\s*/i, "");
+  let m = s.match(/^(?:graph\s+twoway|twoway|tw)\s+([A-Za-z]+)\b(.*)$/is); if (m) { m[2] = m[2].split("||")[0]; const w = m[1].toLowerCase(); const map = { lfit: "scatter", qfit: "scatter", lfitci: "scatter", connected: "line", tsline: "line", area: "line", bar: "bar" }; return { name: map[w] || w, rest: m[2] }; }
+  m = s.match(/^graph\s+(bar|hbar|box|hbox|pie|dot|matrix)\b(.*)$/is); if (m) { const w = m[1].toLowerCase(); return { name: w === "hbox" ? "box" : w === "matrix" ? "corr" : w, rest: w === "matrix" ? `${m[2]}, graph` : m[2] }; }
+  m = s.match(/^ivregress\s+(?:2sls|liml|gmm)\s+(.*)$/is); if (m) return { name: "ivreg", rest: m[1] };
+  m = s.match(/^tsline\s+(.*)$/is); if (m) return { name: "line", rest: m[1] };
+  m = s.match(/^([A-Za-z][A-Za-z0-9_]*)(?:\s+(.*)|\s*(,.*)|\s*(:.*))?$/s); if (!m) return null; const w = m[1].toLowerCase(); const rest = m[2] || m[3] || m[4] || "";
+  if (!(ST_CMDS[w] || ST_ALIAS[w])) return null; if (/^\s*=(?!=)/.test(rest)) return null; // "count = ..." is a formula
+  if (/^\s*\(/.test(rest) && !["ivreg", "ivregress", "collapse", "bysort", "by", "display", "di"].includes(w)) return null; // "round(x)" etc. are functions
+  return { name: w, rest }; };
+// put [ ] around column names with spaces or symbols, so  to_reg GDP per Capita (USD) Employment (%)  works without brackets
+const stWrapNames = (txt, names) => { const odd = names.filter(h => h && /[^A-Za-z0-9_.]/.test(h) && h.trim() === h).sort((a, b) => b.length - a.length); if (!odd.length || !txt) return txt;
+  const low = txt.toLowerCase(), oddL = odd.map(h => h.toLowerCase()); let out = "", i = 0, q = null;
+  while (i < txt.length) { const c = txt[i]; if (q) { out += c; if (c === q) q = null; i++; continue; } if (FX_Q[c]) { q = FX_Q[c]; out += c; i++; continue; }
+    const prev = txt[i - 1] || ""; let hit = -1; if (!/[A-Za-z0-9_]/.test(prev)) for (let k = 0; k < odd.length; k++) { if (low.startsWith(oddL[k], i) && !/[A-Za-z0-9_]/.test(txt[i + odd[k].length] || "")) { hit = k; break; } }
+    if (hit >= 0) { out += "[" + odd[hit] + "]"; i += odd[hit].length; } else { out += c; i++; } }
+  return out; };
 const stRun = (name, rest, S, line) => {
   const cmd = ST_CMDS[name] ? name : ST_ALIAS[name] || null; if (!cmd || !ST_CMDS[cmd]) { const close = Object.keys(ST_CMDS).find(k => k.startsWith(name.slice(0, 2))); throw new Error(`Unknown command to_${name}.${close ? ` Did you mean to_${close}?` : ""} Type to_help to see them all.`); }
-  const P = stParse(rest); const O = P.opts; const out = { line, cmd, title: `to_${cmd} ${rest}`.trim(), blocks: [] }; const add = (b) => out.blocks.push(b);
+  rest = stWrapNames(rest, S.headers); const P = stParse(rest); const O = P.opts; const out = { line, cmd, title: `to_${cmd} ${rest}`.trim(), blocks: [] }; const add = (b) => out.blocks.push(b);
   const n = S.n; const H = () => S.headers;
   const col = (nm) => { const h = S.findCol(stUnq(nm)); if (!h) throw new Error(`No column called "${stUnq(nm)}".`); return h; };
   const numv = (h) => S.cols[h].map(fxNum);
   // expand a varlist: names, wildcards (y20*), ranges (a-b), quoted names
-  const vars = (txt, { need = 0, max = Infinity } = {}) => { const out2 = []; stTokens(txt || "").forEach(tok => { const t = stUnq(tok); if (!t) return;
+  const vars = (txt, { need = 0, max = Infinity } = {}) => { const out2 = []; const whole = S.findCol(stUnq(String(txt || "").trim())); (whole ? [`[${whole}]`] : stTokens(txt || "")).forEach(tok => { const t = stUnq(tok); if (!t) return;
       if (t === "_all" || t === "*") { out2.push(...H()); return; }
       if (/[*?]/.test(t)) { const re = new RegExp("^" + t.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i"); const hit = H().filter(h => re.test(h)); if (!hit.length) throw new Error(`No column matches ${t}.`); out2.push(...hit); return; }
       const h = S.findCol(t); if (h) { out2.push(h); return; }
@@ -827,7 +850,7 @@ const stRun = (name, rest, S, line) => {
         T.push({ name: `${m[1]}${h}`, v }); }); return; }
       if ((m = t.match(/^c\.(.+)$/i))) { vars(m[1]).forEach(h => T.push({ name: h, v: numv(h) })); return; }
       if ((m = t.match(/^(.+)#(.+)$/))) { const a = vars(m[1].replace(/^c\./i, ""), { max: 1 })[0], b = vars(m[2].replace(/^c\./i, ""), { max: 1 })[0]; const x = numv(a), y = numv(b); T.push({ name: `${a}#${b}`, v: x.map((p, i) => p * y[i]) }); return; }
-      vars(t).forEach(h => T.push({ name: h, v: numv(h) })); }); return T; };
+      vars(tok).forEach(h => T.push({ name: h, v: numv(h) })); }); return T; };
   const clusterOf = () => { const c = O.vce && String(O.vce).match(/^cl(?:uster)?\s+(.+)$/i); const name = c ? c[1] : O.cluster && O.cluster !== true ? O.cluster : null; return name ? col(name) : null; };
   const seLabel = (cl, rob) => cl ? `Std. err. adjusted for ${S.est.lastG || "?"} clusters in ${cl}` : rob ? "Robust standard errors (HC1)" : "Conventional standard errors";
   const coefTable = (names, b, se, df, isZ) => { const crit = isZ ? 1.959963984540054 : meTQuant(0.975, df); return { type: "table", head: ["", "Coefficient", "Std. err.", isZ ? "z" : "t", isZ ? "P>|z|" : "P>|t|", "[95% conf.", "interval]"], num: true,
@@ -839,8 +862,8 @@ const stRun = (name, rest, S, line) => {
 
   switch (cmd) {
     case "help": { const want = stUnq(P.main).replace(/^to_/, ""); const c = ST_CMDS[want] || ST_CMDS[ST_ALIAS[want]];
-      if (want && c) { add({ type: "text", text: `${c.syn}\n\n${c.d}.\nMirrors Stata's ${c.st}.` }); out.msg = `help for to_${want}`; break; }
-      add({ type: "table", head: ["Command", "Stata", "What it does"], rows: Object.entries(ST_CMDS).map(([k, c]) => [`to_${k}`, c.st, c.d]) }); out.msg = `${Object.keys(ST_CMDS).length} commands`; break; }
+      if (want && c) { add({ type: "text", text: `${c.syn}\n\n${c.d}.` }); out.msg = `help for to_${want}`; break; }
+      add({ type: "table", head: ["Command", "What it does"], rows: Object.entries(ST_CMDS).map(([k, c]) => [`to_${k}`, c.d]) }); out.msg = `${Object.keys(ST_CMDS).length} commands`; break; }
 
     case "sum": { const vs = vars(P.main || "_all"); const m = sample(); const by = O.by ? vars(O.by) : []; const keys = groupKeys(by); const gl = [...new Set(keys.filter((_, i) => m[i]))];
       const one = (h, rowsIn) => { const x = []; const raw = S.cols[h]; for (const i of rowsIn) { const v = fxNum(raw[i]); if (isFinite(v)) x.push(v); } const N = x.length; const mean = N ? x.reduce((a, b) => a + b, 0) / N : NaN; let s2 = 0, s3 = 0, s4 = 0; for (const v of x) { const d = v - mean; s2 += d * d; s3 += d * d * d; s4 += d * d * d * d; }
@@ -945,7 +968,7 @@ const stRun = (name, rest, S, line) => {
       store({ cmd, title: `${cmd === "logit" ? "Logit" : "Probit"} of ${y.name}`, depvar: y.name, names, b, se, V, df: Infinity, N, r2: 1 - ll / ll0, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v), n0: n, link: cmd, cdf, pdf, use, ll, yv0: y.name });
       break; }
 
-    case "ivreg": { const pm = P.main.match(/^(.*?)\((.+?)=(.+?)\)(.*)$/); if (!pm) throw new Error("Write the endogenous part in brackets: to_ivreg y x1 (x2 = z1 z2)");
+    case "ivreg": { const pm = stIvSplit(P.main); if (!pm) throw new Error("Write the endogenous part in brackets: to_ivreg y x1 (x2 = z1 z2)");
       const lhs = terms(pm[1] + " " + pm[4]); const y = lhs[0], exo = lhs.slice(1), endo = terms(pm[2]), ins = terms(pm[3]); if (!y) throw new Error("Put the outcome first."); if (ins.length < endo.length) throw new Error("Need at least as many instruments as endogenous variables.");
       const m = sample(); const cl = clusterOf(); const rob = !!(O.robust || O.r || O.vce === "robust"); const all = [y, ...exo, ...endo, ...ins];
       const use = []; for (let i = 0; i < n; i++) if (m[i] && all.every(t => isFinite(t.v[i])) && (!cl || !FXB(S.cols[cl][i]))) use.push(i);
@@ -961,7 +984,7 @@ const stRun = (name, rest, S, line) => {
       kv([["Number of obs", N.toLocaleString()], ["R-squared", r2.toFixed(4)], ["Root MSE", stFmt(Math.sqrt(ssr / N), 5)], ["Instrumented", endo.map(t => t.name).join(" ")], ["Instruments", [...exo, ...ins].map(t => t.name).join(" ")]]);
       add({ ...coefTable(names, r2s.beta, se, Infinity, true), caption: y.name });
       add({ type: "table", caption: "First stage", head: ["Endogenous", "F (excluded instruments)", "Prob > F", "Rule of thumb"], num: true, rows: fs.map(f => [f.name, stFmt(f.F, 5), stP(f.p), f.F >= 10 ? "F ≥ 10: instruments look strong" : "F < 10: weak instruments, be careful"]) });
-      add({ type: "note", text: `${seLabel(cl, rob)}. Standard errors use z (large-sample), as Stata's ivregress does by default.` });
+      add({ type: "note", text: `${seLabel(cl, rob)}. Standard errors use z (large-sample), the usual default for 2SLS.` });
       store({ cmd, title: `2SLS of ${y.name}`, depvar: y.name, names, b: r2s.beta, se, V, df: Infinity, N, r2, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : ([...endo, ...exo].find(t => t.name === nm) || {}).v), n0: n, link: "id" });
       break; }
 
@@ -993,7 +1016,7 @@ const stRun = (name, rest, S, line) => {
 
     case "test": { const e = S.est.last; if (!e) throw new Error("Run a model first, then to_test."); const R = []; const r = [];
       const parts = P.main.includes("=") ? P.main.split(/\)\s*\(|;/).map(x => x.replace(/^\(|\)$/g, "")) : [P.main];
-      const idx = (nm) => { const j = e.names.findIndex(x => x.toLowerCase() === stUnq(nm).toLowerCase()); if (j < 0) throw new Error(`${nm} is not in the last model (${e.names.join(", ")}).`); return j; };
+      const idx = (nm) => { const j = e.names.findIndex(x => x.toLowerCase() === stUnq(nm).toLowerCase()); if (j < 0) throw new Error(`${stUnq(nm)} is not in the last model (${e.names.join(", ")}).`); return j; };
       parts.forEach(pt => { const sides = pt.split("=").map(x => x.trim()).filter(Boolean); if (sides.length === 1) stTokens(sides[0]).forEach(t => { const row = new Array(e.names.length).fill(0); row[idx(t)] = 1; R.push(row); r.push(0); });
         else for (let s = 1; s < sides.length; s++) { const row = new Array(e.names.length).fill(0); row[idx(sides[0])] += 1; const num = fxNum(sides[s]); if (isFinite(num)) r.push(num); else { row[idx(sides[s])] -= 1; r.push(0); } R.push(row); } });
       const Rb = R.map((row, i) => meDot(row, e.b) - r[i]); const RVR = R.map(a => R.map(b => meDot(a, meMV(e.V, b)))); const inv = stInv(RVR); if (!inv) throw new Error("These restrictions are not independent.");
@@ -1124,7 +1147,7 @@ const stRun = (name, rest, S, line) => {
 // ══════════════════════════════════════════════
 Object.assign(ST_CMDS, {
   mean: { st: "mean", g: "Describe data", syn: "to_mean gdp inflation [if] [, over(region) level(90)]", d: "Means with standard errors and confidence intervals" },
-  proportion: { st: "proportion", g: "Describe data", syn: "to_proportion region [, over(year)]", d: "Share of rows in each category, with logit confidence intervals like Stata" },
+  proportion: { st: "proportion", g: "Describe data", syn: "to_proportion region [, over(year)]", d: "Share of rows in each category, with logit confidence intervals" },
   total: { st: "total", g: "Describe data", syn: "to_total aid [, over(region)]", d: "Column totals with standard errors" },
   ratio: { st: "ratio", g: "Describe data", syn: "to_ratio debt / gdp", d: "Ratio of two means with a standard error" },
   tabstat: { st: "tabstat", g: "Describe data", syn: "to_tabstat gdp inflation, stats(mean sd p50 min max n) [by(region)]", d: "Compact table of chosen statistics, optionally by group" },
@@ -1205,7 +1228,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
         groupsL.forEach(G => { const idx = []; for (let i = 0; i < n; i++) if (m[i] && keys[i] === G && !FXB(S.cols[h][i])) idx.push(i); const N = idx.length; if (!N) return; const c = tcrit(N - 1, level);
           lv.forEach(L => { const k = idx.filter(i => fxKey(S.cols[h][i]) === L).length; const p = k / N; const se = N > 1 ? Math.sqrt(p * (1 - p) / (N - 1)) : NaN; let lo = 0, hi = 1; if (p > 0 && p < 1) { const l = Math.log(p / (1 - p)), d = c * se / (p * (1 - p)); lo = 1 / (1 + Math.exp(-(l - d))); hi = 1 / (1 + Math.exp(-(l + d))); }
             rows.push([`${h}=${lvAll.get(L)}${g ? ` @ ${g}=${lab(G)}` : ""}`, N.toLocaleString(), stFmt(p, 4), stFmt(se, 4), stFmt(lo, 4), stFmt(hi, 4)]); }); }); });
-      add({ type: "table", head: ["", "Obs", "Proportion", "Std. err.", `[${level}% conf.`, "interval]"], num: true, rows, note: "Logit-transformed intervals, as in Stata." }); out.msg = `${rows.length} proportions`; return true; }
+      add({ type: "table", head: ["", "Obs", "Proportion", "Std. err.", `[${level}% conf.`, "interval]"], num: true, rows, note: "Logit-transformed intervals." }); out.msg = `${rows.length} proportions`; return true; }
     case "ratio": { const t = P.main.replace("/", " "); const [a, b] = vars(t, { need: 2, max: 2 }); const m = sample(); const ya = numv(a), xb = numv(b); const idx = []; for (let i = 0; i < n; i++) if (m[i] && isFinite(ya[i]) && isFinite(xb[i])) idx.push(i); const N = idx.length; if (N < 2) throw new Error("Not enough rows.");
       const my = idx.reduce((s, i) => s + ya[i], 0) / N, mx = idx.reduce((s, i) => s + xb[i], 0) / N; const r = my / mx; const d = idx.map(i => (ya[i] - r * xb[i]) / mx); const md = d.reduce((p, q) => p + q, 0) / N; const se = Math.sqrt(d.reduce((p, q) => p + (q - md) ** 2, 0) / (N - 1)) / Math.sqrt(N); const c = tcrit(N - 1, level);
       add({ type: "table", head: ["", "Obs", "Ratio", "Std. err.", `[${level}% conf.`, "interval]"], num: true, rows: [[`${a}/${b}`, N.toLocaleString(), stFmt(r), stFmt(se), stFmt(r - c * se), stFmt(r + c * se)]] }); out.msg = `${a}/${b} = ${stFmt(r)}`; return true; }
@@ -1261,7 +1284,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
         kv([["Unadjusted variance", stFmt(n1 * n2 * (N + 1) / 12)], ["Adjustment for ties", stFmt(-n1 * n2 * ties / (12 * N * (N - 1)))], ["Adjusted variance", stFmt(V)], ["H0", `${h}(${by}==${lb(lv[0])}) = ${h}(${by}==${lb(lv[1])})`], ["z", stFmt(z, 4)], ["Prob > |z|", stP(2 * (1 - meNormCdf(Math.abs(z))))]]); out.msg = `z = ${stFmt(z, 4)}`; return true; }
       const s1 = g1.slice().sort((a, b) => a - b), s2 = g2.slice().sort((a, b) => a - b); const pts = [...new Set([...s1, ...s2])].sort((a, b) => a - b); let i1 = 0, i2 = 0, Dp = 0, Dm = 0; pts.forEach(v => { while (i1 < n1 && s1[i1] <= v) i1++; while (i2 < n2 && s2[i2] <= v) i2++; const d = i1 / n1 - i2 / n2; Dp = Math.max(Dp, d); Dm = Math.max(Dm, -d); });
       const D = Math.max(Dp, Dm); const en = Math.sqrt(n1 * n2 / N); const pc = stKS((en + 0.12 + 0.11 / en) * D);
-      add({ type: "table", head: ["Smaller group", "D", "p-value"], num: true, rows: [[`${by}=${lb(lv[0])}`, stFmt(Dp, 4), stP(Math.exp(-2 * en * en * Dp * Dp))], [`${by}=${lb(lv[1])}`, stFmt(-Dm, 4), stP(Math.exp(-2 * en * en * Dm * Dm))], ["Combined K-S", stFmt(D, 4), stP(pc)]], note: "Asymptotic p-values (Stata also prints an exact one for small samples)." }); out.msg = `D = ${stFmt(D, 4)}, p = ${stP(pc)}`; return true; }
+      add({ type: "table", head: ["Smaller group", "D", "p-value"], num: true, rows: [[`${by}=${lb(lv[0])}`, stFmt(Dp, 4), stP(Math.exp(-2 * en * en * Dp * Dp))], [`${by}=${lb(lv[1])}`, stFmt(-Dm, 4), stP(Math.exp(-2 * en * en * Dm * Dm))], ["Combined K-S", stFmt(D, 4), stP(pc)]], note: "Asymptotic p-values." }); out.msg = `D = ${stFmt(D, 4)}, p = ${stP(pc)}`; return true; }
     case "poisson": { const tk = terms(P.main); if (tk.length < 2) throw new Error(`Syntax: ${ST_CMDS.poisson.syn}`); const y = tk[0], xs = tk.slice(1); const m = sample(); const cl = X.clusterOf(); const rob = !!(O.robust || O.r || O.vce === "robust");
       const use = []; for (let i = 0; i < n; i++) if (m[i] && isFinite(y.v[i]) && xs.every(t => isFinite(t.v[i])) && (!cl || !FXB(S.cols[cl][i]))) use.push(i); if (use.some(i => y.v[i] < 0)) throw new Error(`${y.name} has negative values; Poisson needs counts (0, 1, 2, ...).`);
       let names = [...xs.map(t => t.name), "_cons"]; let Xm = use.map(i => [...xs.map(t => t.v[i]), 1]); const keep = stKeepCols(Xm); if (keep.length < names.length) { Xm = Xm.map(r => keep.map(j => r[j])); names = keep.map(j => names[j]); }
@@ -1303,7 +1326,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
       const rows = want.map(nm => { const j = e.names.indexOf(nm); const est = eff(e.b, j); const g = e.b.map((bj, q) => { const h = 1e-6 * Math.max(1, Math.abs(bj)); const bp = e.b.slice(), bm = e.b.slice(); bp[q] += h; bm[q] -= h; return (eff(bp, j) - eff(bm, j)) / (2 * h); }); const se = Math.sqrt(Math.max(0, meQF(g, e.V))); const z = est / se; const p = 2 * (1 - meNormCdf(Math.abs(z)));
         return [nm, stFmt(est, 7) + stStars(p), stFmt(se, 7), stFmt(z, 4), stP(p), stFmt(est - 1.959963984540054 * se, 7), stFmt(est + 1.959963984540054 * se, 7)]; });
       add({ type: "kv", items: [["Model", `${e.name} (${e.title})`], ["Number of obs", e.N.toLocaleString()], ["Expression", lin ? "Linear prediction" : e.link === "log" ? "Predicted number of events" : "Pr(" + e.depvar + ")"], [mode === "eyex" ? "ey/ex w.r.t." : "dy/dx w.r.t.", want.join(" ")], atm ? ["At", "means of the regressors"] : null].filter(Boolean) });
-      add({ type: "table", head: ["", mode === "eyex" ? "ey/ex" : "dy/dx", "Delta-method std. err.", "z", "P>|z|", "[95% conf.", "interval]"], num: true, rows, note: want.some(x => x.includes("=")) && !atm ? "Category dummies (from i.) show the discrete change from the base level, like Stata." : null }); out.msg = `${rows.length} ${mode === "eyex" ? "elasticit" + (rows.length > 1 ? "ies" : "y") : "marginal effect" + (rows.length > 1 ? "s" : "")}`; return true; }
+      add({ type: "table", head: ["", mode === "eyex" ? "ey/ex" : "dy/dx", "Delta-method std. err.", "z", "P>|z|", "[95% conf.", "interval]"], num: true, rows, note: want.some(x => x.includes("=")) && !atm ? "Category dummies (from i.) show the discrete change from the base level." : null }); out.msg = `${rows.length} ${mode === "eyex" ? "elasticit" + (rows.length > 1 ? "ies" : "y") : "marginal effect" + (rows.length > 1 ? "s" : "")}`; return true; }
     case "rvfplot": { const e = lastReg("to_rvfplot"); const yy = numv(S.findCol(e.depvar) || e.depvar); const Xd = design(e); const rows = e.use.map((i, q) => { const f = meDot(Xd[q], e.b); return [f, yy[i] - f]; }).filter(() => !e.fe || !e.fe.length);
       if (!rows.length) throw new Error("to_rvfplot works after to_reg without absorbed fixed effects."); add({ type: "chart", title: `Residuals against fitted values (${e.name})`, tab: { headers: ["Fitted values", "Residuals"], rows }, t: { type: "scatter", x: "Fitted values", ys: ["Residuals"], opts: { trend: false } } }); out.msg = `${rows.length} points`; return true; }
     case "estimates": { const [sub, ...restT] = stTokens(P.main); const s = (sub || "").toLowerCase(); const nm = stUnq(restT[0] || "");
@@ -1347,7 +1370,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
       const Hs = H().slice(); const C = {}; Hs.forEach(h => { C[h] = S.cols[h].slice(); });
       if (cmd === "append") { const add2 = DH.filter(h => !Hs.some(x => x.toLowerCase() === h.toLowerCase())); const H2 = [...Hs, ...add2]; add2.forEach(h => { C[h] = new Array(n).fill(null); }); const src = O.gen && O.gen !== true ? stUnq(O.gen) : O.generate && O.generate !== true ? stUnq(O.generate) : null; if (src) { C[src] = new Array(n).fill(0); H2.push(src); }
         D.rows.forEach(r => { H2.forEach(h => { if (h === src) { C[h].push(1); return; } const j = DH.findIndex(x => x.toLowerCase() === h.toLowerCase()); C[h].push(j >= 0 ? fxCell(r[j]) : null); }); }); S.replaceAll(H2, C); out.msg = `appended ${D.rows.length.toLocaleString()} rows from "${D.name}" (${(n + D.rows.length).toLocaleString()} rows now)`; out.changes = true; return true; }
-      const pm2 = X.rest.slice(0, um.index).trim().match(/^(1:1|m:1|1:m|m:m)\s+(.+)$/i); if (!pm2) throw new Error(`Say the kind of merge and the key columns: ${ST_CMDS.merge.syn}`); const kind = pm2[1].toLowerCase(); if (kind === "m:m") throw new Error("m:m merges are almost always a mistake (Stata warns too). Use 1:1, m:1 or 1:m.");
+      const pm2 = X.rest.slice(0, um.index).trim().match(/^(1:1|m:1|1:m|m:m)\s+(.+)$/i); if (!pm2) throw new Error(`Say the kind of merge and the key columns: ${ST_CMDS.merge.syn}`); const kind = pm2[1].toLowerCase(); if (kind === "m:m") throw new Error("m:m merges are almost always a mistake. Use 1:1, m:1 or 1:m.");
       const keys = vars(pm2[2], { need: 1 }); const dk = keys.map(dcol); const keyM = (i) => keys.map(h => fxKey(S.cols[h][i])).join("\u0001"); const keyU = (r) => dk.map(j => fxKey(fxCell(r[j]))).join("\u0001");
       const um2 = new Map(); D.rows.forEach((r, q) => { const k = keyU(r); if (!um2.has(k)) um2.set(k, []); um2.get(k).push(q); }); if (kind[2] === "1" && [...um2.values()].some(a => a.length > 1)) throw new Error(`${keys.join(" ")} do not identify the rows of "${D.name}" uniquely, so this cannot be ${kind}. Try 1:m.`);
       if (kind[0] === "1") { const seen = new Set(); for (let i = 0; i < n; i++) { const k = keyM(i); if (seen.has(k)) throw new Error(`${keys.join(" ")} repeat in this dataset, so this cannot be ${kind}. Try m:1.`); seen.add(k); } }
@@ -1493,7 +1516,7 @@ const ceEval = (formula, H, R, i, opts = {}) => { let expr = String(formula).rep
   return { v, err: seen }; };
 // Excel-like display of a result: numbers trimmed, NaN → error value
 const ceShow = (v, formula, err) => { if (typeof v === "number") { if (isFinite(v)) return String(+v.toPrecision(12)); return err || (/\//.test(String(formula || "")) ? "#DIV/0!" : "#NUM!"); } if (v == null) return /look_up|XLOOKUP|MATCH|VLOOKUP/i.test(String(formula || "")) ? "#N/A" : ""; return String(v); };
-const ceErrOf = (msg) => { const m = String(msg || ""); if (CE_ERRS.includes(m)) return m; if (/No column called|Unknown function|not available|looks like an Excel cell/i.test(m)) return "#NAME?"; if (/does not exist|out of range/i.test(m)) return "#REF!"; return "#VALUE!"; };
+const ceErrOf = (msg) => { const m = String(msg || ""); if (CE_ERRS.includes(m)) return m; if (/No column called|Unknown function|not available|looks like (?:an Excel cell|a cell reference)/i.test(m)) return "#NAME?"; if (/does not exist|out of range/i.test(m)) return "#REF!"; return "#VALUE!"; };
 // Excel fill: from a source block, produce values for the next k cells along a line (Excel's AutoFill rules)
 // vals: source values (strings) in order; returns array of k new values. Numbers: linear trend if 2+ numbers, else copy;
 // text ending in a number (Item 3) counts up; dates step by the source step (or 1 day); weekday and month names continue.

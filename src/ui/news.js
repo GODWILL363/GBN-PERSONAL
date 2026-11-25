@@ -6,6 +6,8 @@ import { MiniMd } from "./chatkit";
 
 // Release notes shipped with the app. Add the newest at the top with each deploy.
 export const RELEASES = [
+  { id: "rel-5", ts: "2026-11-25T20:45:00Z", when: "25 Nov 2026", kind: "update", version: "Update 5", title: "EcoScript: commands without to_ and spaced column names",
+    body: "- In **Workbench → Formulas**, commands work with or without `to_`: `reg y x, robust`, `sum`, `scatter y x`, `twoway scatter y x || lfit y x`, `graph bar y, over(region)`, `hist x`, `ivregress 2sls y (x = z)`, `bysort country: ...`.\n- Column names with spaces or symbols, such as `GDP per Capita (USD)`, now work in every command with or without `[brackets]`. This fixes regressions that stopped at the first word of a name.\n- The missing-data notice now always agrees with the table." },
   { id: "rel-4", ts: "2026-11-25T12:00:00Z", when: "25 Nov 2026", kind: "update", version: "Update 4", title: "Better tables, missing-data alerts and this bell",
     body: "- **Table view** now lists every variable you chose, including columns from your own imported files, with full names and exact values.\n- **Missing data notice**: when any variable has gaps, EcoScope tells you how many and where, and you can fill them in one click (linear interpolation, forward fill, backward fill or mean). Filled cells show in italics, and a **Missing** row at the bottom counts gaps per column.\n- **What's new** (this bell): see each update or upgrade and what it does." },
   { id: "rel-3", ts: "2026-11-20T12:00:00Z", when: "November 2026", kind: "update", version: "Update 3", title: "Password reset, invitations, exports and project chat",

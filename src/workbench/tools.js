@@ -31,23 +31,18 @@ const CMB_OVERLAP = [
   ["suffix","Keep both (second table's copy gets a suffix)"],
   ["master","Keep the first table's values"],
   ["using","Use the second table's values"],
-  ["update","Fill blanks in the first table from the second (Stata update)"],
+  ["update","Fill blanks in the first table from the second"],
   ["replace","Replace with the second table's value where it is not blank (update replace)"],
 ];
 const cmbCode = (mode, cfg, nameA, nameB) => {
   const sn=(s)=>String(s||"data").replace(/[^A-Za-z0-9_]+/g,"_");
   if (mode==="append"){ const ts=(cfg.names||[]).map(sn); return [
-    `* Stata\nuse ${ts[0]}, clear\nappend using ${ts.slice(1).join(" ")}${cfg.source?`, gen(${cfg.source})`:""}${cfg.match==="intersection"? "\n* then drop the variables that are not in every file" : ""}`,
-    `/* SAS */\ndata combined;\n  set ${ts.join(" ")};\nrun;`,
-    `# R (dplyr)\ncombined <- bind_rows(${ts.map(t=>`${t} = ${t}`).join(", ")}${cfg.source?`, .id = "${cfg.source}"`:""})`,
-    `# Python (pandas)\ncombined = pd.concat([${ts.join(", ")}]${cfg.match==="intersection"?", join='inner'":""}, ignore_index=True)`].join("\n\n"); }
+    `* EcoScript (Workbench → Formulas, with "${(cfg.names||[])[0]||"data"}" open)\n${(cfg.names||[]).slice(1).map(n=>`to_append using "${n}"${cfg.source?`, gen(${cfg.source})`:""}`).join("\n")}${cfg.match==="intersection"? "\n* then drop the columns that are not in every table" : ""}`].join("\n\n"); }
   const lk=cfg.keys.map(k=>k.l), rk=cfg.keys.map(k=>k.r); const h=CMB_HOW.find(x=>x[0]===cfg.how)||CMB_HOW[0]; const A=sn(nameA), B=sn(nameB);
-  const same=cfg.keys.every(k=>k.l===k.r); const stataKeep=h[3].startsWith("keep(")? `, ${h[3]}` : "";
+  const same=cfg.keys.every(k=>k.l===k.r); const ecoKeep=h[3].startsWith("keep(")? `, ${h[3]}` : "";
   return [
-    `* Stata${same?"":"  (rename the keys first so they have the same names)"}\nuse ${A}, clear\nmerge ${cfg.type} ${lk.join(" ")} using ${B}${stataKeep}${h[3].startsWith("keep if")? `\n${h[3]}` : ""}\ntab _merge`,
-    `/* SAS */\nproc sort data=${A}; by ${lk.join(" ")}; run;\nproc sort data=${B}; by ${rk.join(" ")}; run;\ndata merged;\n  merge ${A}(in=a) ${B}(in=b${same?"":` rename=(${cfg.keys.filter(k=>k.l!==k.r).map(k=>`${k.r}=${k.l}`).join(" ")})`});\n  by ${lk.join(" ")};\n  ${h[4]}\nrun;`,
-    `# R (dplyr)\nmerged <- ${cfg.how==="anti_right"? `anti_join(${B}, ${A}` : cfg.how==="anti_left"? `anti_join(${A}, ${B}` : `${h[5].replace("()","")}(${A}, ${B}`}, by = c(${cfg.keys.map(k=>k.l===k.r? `"${k.l}"` : `"${k.l}" = "${k.r}"`).join(", ")})${cfg.how.startsWith("anti")? "" : `, relationship = "${{ "1:1":"one-to-one","m:1":"many-to-one","1:m":"one-to-many","m:m":"many-to-many" }[cfg.type]}"`})`,
-    `# Python (pandas)\nmerged = pd.merge(${A}, ${B}, ${same? `on=[${lk.map(k=>`'${k}'`).join(", ")}]` : `left_on=[${lk.map(k=>`'${k}'`).join(", ")}], right_on=[${rk.map(k=>`'${k}'`).join(", ")}]`}, how='${{ left:"left", inner:"inner", right:"right", full:"outer", anti_left:"left", anti_right:"right" }[cfg.how]}',\n                  validate='${{ "1:1":"one_to_one","m:1":"many_to_one","1:m":"one_to_many","m:m":"many_to_many" }[cfg.type]}', indicator=True)`].join("\n\n"); };
+    `* EcoScript (Workbench → Formulas, with "${nameA||"data"}" open)${same?"":"\n* rename the keys in the second table first so they have the same names"}\nto_merge ${cfg.type} ${lk.join(" ")} using "${nameB||"data"}"${ecoKeep}${h[3].startsWith("keep if")? `\nto_${h[3]}` : ""}\nto_tab _merge`
+  ].join("\n\n"); };
 const WbStat = ({ label, value, tone }) => <div style={{ ...card, padding:"8px 12px", minWidth:110 }}><div style={{ fontSize:10.5, color:C.dim, textTransform:"uppercase", letterSpacing:".04em" }}>{label}</div><div style={{ fontSize:18, fontWeight:700, color:tone||C.text }}>{value}</div></div>;
 const WbChoice = ({ on, onClick, title, sub, extra }) => <button type="button" aria-pressed={on} onClick={onClick} style={{ textAlign:"left", background:on? `${C.gold}18` : C.card, border:`1px solid ${on? C.gold : C.border}`, borderRadius:6, padding:"8px 10px", cursor:"pointer", color:C.text }}>
   <div style={{ fontSize:12.5, fontWeight:600, color:on? C.gold : C.text }}>{title}</div>{sub && <div style={{ fontSize:11, color:C.mid, lineHeight:1.45, marginTop:2 }}>{sub}</div>}{extra}</button>;
@@ -88,7 +83,7 @@ function WbCombine({ datasets, addDataset, basketTable, isMobile }) {
           <button type="button" role="tab" aria-selected={mode==="append"} onClick={()=>setMode("append")} style={{ ...pill(mode==="append"), padding:"7px 12px" }}>Append: add rows</button>
         </div>
         {!extraChart && <button type="button" style={wbSmallBtn()} onClick={()=>{ const t=basketTable(); if (t?.rows?.length) setExtraChart(t); else alert("The chart has no data yet."); }}>+ Use the current chart data</button>}
-        <span style={{ fontSize:11.5, color:C.dim }}>{mode==="merge"? "Like Stata merge, SAS MERGE … BY, SQL JOIN, dplyr *_join, pandas merge." : "Like Stata append, SAS SET a b, dplyr bind_rows, pandas concat."}</span>
+        <span style={{ fontSize:11.5, color:C.dim }}>{mode==="merge"? "Join columns from another table by matching key columns." : "Stack the rows of two or more tables."}</span>
       </div>
 
       {mode==="merge" && <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"minmax(300px,420px) 1fr", gap:16 }}>
@@ -130,7 +125,7 @@ function WbCombine({ datasets, addDataset, basketTable, isMobile }) {
         <div style={{ display:"grid", gap:12, alignContent:"start", minWidth:0 }}>
           {L && R && <div style={{ ...card, padding:"12px 14px" }}>
             <h3 style={wbH}>3. Which rows to keep</h3>
-            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr 1fr", gap:6 }}>{CMB_HOW.map(([k,t,s,st])=><WbChoice key={k} on={how===k} onClick={()=>setHow(k)} title={t} sub={s} extra={<div style={{ fontSize:10.5, color:C.dim, marginTop:3, fontFamily:C.code }}>Stata: {st}</div>}/>)}</div>
+            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr 1fr", gap:6 }}>{CMB_HOW.map(([k,t,s,st])=><WbChoice key={k} on={how===k} onClick={()=>setHow(k)} title={t} sub={s} extra={<div style={{ fontSize:10.5, color:C.dim, marginTop:3, fontFamily:C.code }}>EcoScript option: {st}</div>}/>)}</div>
             {overlapCols.length>0 && <div style={{ marginTop:12 }}>
               <h3 style={wbH}>Columns in both tables: {overlapCols.join(", ")}</h3>
               <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:6 }}>{CMB_OVERLAP.map(([k,t])=><WbChoice key={k} on={overlap===k} onClick={()=>setOverlap(k)} title={t}/>)}</div>
@@ -155,7 +150,7 @@ function WbCombine({ datasets, addDataset, basketTable, isMobile }) {
           </div>
           <div style={{ ...card, padding:"12px 14px", display:"grid", gap:8 }}>
             <h3 style={wbH}>2. Columns</h3>
-            <WbChoice on={match==="union"} onClick={()=>setMatch("union")} title="Keep all columns" sub="A column missing from one table is left blank for its rows (Stata append)."/>
+            <WbChoice on={match==="union"} onClick={()=>setMatch("union")} title="Keep all columns" sub="A column missing from one table is left blank for its rows."/>
             <WbChoice on={match==="intersection"} onClick={()=>setMatch("intersection")} title="Only columns in every table" sub="Drops columns that are not in all tables."/>
             <label style={{ fontSize:12, color:C.text, display:"flex", gap:6, alignItems:"center" }}><input type="checkbox" checked={ciNames} onChange={e=>setCiNames(e.target.checked)}/> Match column names ignoring case (Year = year)</label>
             <label style={lab}>Column that records which table each row came from (leave blank for none)<input value={srcCol} onChange={e=>setSrcCol(e.target.value)} style={{ ...inp, marginTop:4 }}/></label>
@@ -202,7 +197,7 @@ function WbCombineResult({ out, pending, onRun, name, setName, defName, addDatas
       </div>}
       <WbGrid tab={out} highlight={mode==="merge"? out.headers.filter(h=>h==="_merge") : []} max={150} height={340}/>
       <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
-        <button type="button" style={wbSmallBtn()} onClick={()=>setShowCode(v=>!v)}>{showCode? "Hide" : "Show"} the same step in Stata, SAS, R and Python</button>
+        <button type="button" style={wbSmallBtn()} onClick={()=>setShowCode(v=>!v)}>{showCode? "Hide" : "Show"} this step as an EcoScript script</button>
       </div>
       {showCode && <pre style={{ ...card, padding:"10px 14px", fontFamily:C.code, fontSize:11.5, color:C.text, whiteSpace:"pre-wrap", margin:0 }}>{code}</pre>}
     </div>
