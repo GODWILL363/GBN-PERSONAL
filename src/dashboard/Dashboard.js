@@ -1,5 +1,7 @@
 // dashboard/Dashboard.js — split from App.js (code unchanged; only imports and exports were added)
 import { ProjectChat, getSeen } from "../ui/chatkit";
+import { ecoMissingReport, ecoPadSeries } from "../analysis/missing";
+import { NewsButton } from "../ui/news";
 import { SnapshotGallery } from "../ui/snapshots";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
@@ -231,7 +233,7 @@ function Dashboard({user, onLogout}) {
       return out;
     };
 
-    const primaryResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, effCountry)));
+    const primaryResults = ecoPadSeries(await Promise.all(varBasket.map(item=>fetchBasketItem(item, effCountry))));
     const newMultiData = {};
     const emptyVars=new Set();
     varBasket.forEach((item,i)=>{
@@ -245,7 +247,7 @@ function Dashboard({user, onLogout}) {
     setRawData(primaryResults[0]||[]);
 
     if(cmpOn){
-      const cmpResults = await Promise.all(varBasket.map(item=>fetchBasketItem(item, cmpCountry)));
+      const cmpResults = ecoPadSeries(await Promise.all(varBasket.map(item=>fetchBasketItem(item, cmpCountry))));
       const newCmpMulti = {};
       varBasket.forEach((item,i)=>{
         newCmpMulti[`${item.sourceId}:${item.varCode}`] = cmpResults[i]||[];
@@ -289,11 +291,12 @@ function Dashboard({user, onLogout}) {
   // Reprocess (transform/impute) purely client-side — NO network calls, instant on Apply
   useEffect(()=>{
     setData(applyTransform(imputeData(rawData, appliedImpute), appliedTransform));
-    const missing=rawData.filter(d=>d.value==null).length;
-    if(missing>0&&appliedImpute==="none"&&rawData.length>0){
-      setMissingAlert({count:missing,total:rawData.length,varName:varBasket[0]?.label||"variable"});
-    } else setMissingAlert(null);
   },[rawData, appliedImpute, appliedTransform]);
+  // missing values in every variable of the basket (before imputation); the notice comes back when the basket or data change
+  const missingReport=useMemo(()=>ecoMissingReport(varBasket.map(item=>({ name:item.label||item.varCode, data:multiData[`${item.sourceId}:${item.varCode}`]||[] }))),[varBasket, multiData]);
+  const missingSig=missingReport.map(r=>`${r.name}:${r.missing}`).join("|");
+  useEffect(()=>{ setMissingAlert(missingReport.length? { sig:missingSig } : null); },[missingSig]);
+  const quickImpute=(m)=>{ setImputeMethod(m); setAppliedImpute(m); };
 
   useEffect(()=>{
     setCmpData(applyTransform(imputeData(cmpRawData, appliedImpute), appliedTransform));
@@ -1040,6 +1043,7 @@ function Dashboard({user, onLogout}) {
             style={{display:"flex",alignItems:"center",gap:5,background:showChat?`${C.teal}18`:"none",border:`1px solid ${showChat?C.teal:C.border}`,borderRadius:6,color:C.text,cursor:"pointer",padding:isMobile?"7px 9px":"6px 10px",fontSize:12,position:"relative"}}>
             <Ico n="message"/>{!isMobile&&"Chat"}{chatUnread&&<span aria-hidden="true" style={{position:"absolute",top:-3,right:-3,width:9,height:9,borderRadius:5,background:C.red,border:`2px solid ${C.surface}`}}/>}</button>}
           {showChat&&activeProject&&<ProjectChat project={activeProject} me={user.username} onClose={()=>setShowChat(false)} onSeen={()=>setChatUnread(false)}/>}
+          <NewsButton username={user.username} compact={isMobile}/>
           {/* Global reload button */}
           <button onClick={forceRefresh} disabled={loading} title="Reload data" style={{background:"none",border:`1px solid ${loading?C.teal:C.border}`,borderRadius:6,color:loading?C.teal:C.mid,cursor:loading?"wait":"pointer",padding:isMobile?"7px 9px":"7px 11px",fontSize:isMobile?13:12,display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
             <span style={{display:"inline-block",animation:loading?"spin 0.8s linear infinite":"none"}}>↻</span>
@@ -1676,6 +1680,39 @@ function Dashboard({user, onLogout}) {
               </div>
             </div>
 
+            {/* MISSING DATA NOTICE: every variable in the basket, with one-click imputation */}
+            {varBasket.length>0&&!loading&&missingReport.length>0&&(()=>{
+              const total=missingReport.reduce((s,r)=>s+r.missing,0);
+              const implabel=IMPUTE_METHODS.find(m=>m.id===appliedImpute)?.label;
+              if(appliedImpute!=="none"){
+                const filled=varBasket.reduce((s,item)=>{ const raw=multiData[`${item.sourceId}:${item.varCode}`]||[]; const imp=imputeData(raw,appliedImpute); return s+raw.filter((d,i)=>d.value==null&&imp[i]?.value!=null).length; },0);
+                return(<div role="status" style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",background:`${C.teal}14`,border:`1px solid ${C.teal}55`,borderRadius:6,padding:"8px 12px",margin:"0 0 10px",fontSize:12}}>
+                  <span style={{color:C.teal,fontWeight:700}}>Imputed: {implabel}</span>
+                  <span style={{color:C.mid,flex:1,minWidth:200}}>{filled} of {total} missing value{total===1?"":"s"} filled.{filled<total?" The rest are before the first or after the last observed value, which this method does not fill.":""} Filled cells are shown in italics in the table.</span>
+                  <button type="button" onClick={()=>quickImpute("none")} style={{...pill(false),fontSize:11}}>Undo</button>
+                </div>);
+              }
+              if(!missingAlert) return null;
+              return(<div role="alert" style={{background:`${C.orange}14`,border:`1px solid ${C.orange}66`,borderRadius:6,padding:"10px 12px",margin:"0 0 10px"}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+                  <span aria-hidden="true" style={{fontSize:16,color:C.orange}}>⚠︎</span>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:C.orange,fontSize:12.5,fontWeight:700}}>Missing data: {total} value{total===1?"":"s"} missing in {missingReport.length} of {varBasket.length} variable{varBasket.length===1?"":"s"}</div>
+                    <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginTop:4,lineHeight:1.6}}>
+                      {missingReport.slice(0,6).map(r=><div key={r.name}>{r.name}: {r.missing} of {r.total}{r.inside? ` · ${r.inside} inside the range`:""}{r.leading? ` · ${r.leading} at the start`:""}{r.trailing? ` · ${r.trailing} at the end`:""}</div>)}
+                      {missingReport.length>6&&<div>and {missingReport.length-6} more</div>}
+                    </div>
+                    <div style={{color:C.mid,fontSize:11,marginTop:6}}>Charts, tables and statistics skip missing values. Impute to fill them:</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
+                      {[["linear","Linear interpolation"],["forward","Forward fill"],["backward","Backward fill"],["mean","Mean"]].map(([m,l])=><button key={m} type="button" onClick={()=>quickImpute(m)} style={{background:C.orange,color:C.onGold,border:"none",borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{l}</button>)}
+                      <button type="button" onClick={()=>{ setAnalysisTab("impute"); if(isMobile) setSidebarOpen(true); }} style={{...pill(false),fontSize:11}}>More methods…</button>
+                    </div>
+                  </div>
+                  <button type="button" aria-label="Dismiss the missing data notice" onClick={()=>setMissingAlert(null)} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:14}}>✕</button>
+                </div>
+              </div>);
+            })()}
+
             {!varBasket.length ? (
               <div style={{height:320,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10,color:C.mid,textAlign:"center",padding:"0 20px"}}>
                 <span style={{fontSize:30,color:C.gold}}><Ico n="chart"/></span>
@@ -1734,69 +1771,69 @@ function Dashboard({user, onLogout}) {
               </div>
             ) : (
               <div id="scroll-table" style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-                {/* Multi-variable table */}
+                {/* Data table: one row per period, one column per basket variable (imported or fetched), after imputation and transform */}
                 {(()=>{
-                  const allVarDefs2=varBasket.map(item=>{
-                    const s2=ALL_SRCS_MAP[item.sourceId]||source;
-                    const vd2=s2.vars.find(v=>v.code===item.varCode);
-                    return vd2?{...vd2,_dk:`${item.sourceId}:${item.varCode}`,_sourceColor:item.sourceColor,_sourceName:item.sourceName}:null;
-                  }).filter(Boolean);
-                  const allYears2=[...new Set([
-                    ...Object.values(multiData).flatMap(arr=>arr.map(d=>d.year)),
-                    ...Object.values(cmpMultiData).flatMap(arr=>arr.map(d=>d.year)),
-                  ])].sort(ecoTimeCmp);
-                  const _tc=new Map(); const tSeries=(raw,imp,tr)=>{ const k=raw; let e=_tc.get(k); if(!e){ const arr=applyTransform(imputeData(raw,imp),tr); e={ m:new Map(arr.map(d=>[String(d.year),d])), r:new Map(raw.map(d=>[String(d.year),d])) }; _tc.set(k,e); } return e; }; // computed once per series, looked up by year
-                  if(!allYears2.length) return <div style={{padding:"20px",textAlign:"center",color:C.dim,fontFamily:C.mono}}>No data</div>;
-                  return(
-                    <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:11,minWidth:500}}>
+                  const tfmt=(v,fmt)=>{ if(v==null||!isFinite(v)) return null; if(appliedTransform==="none"&&fmt==="pct") return `${Number(v).toFixed(2)}%`; const a=Math.abs(v); const s=Number(v).toLocaleString(undefined,{maximumFractionDigits:a===0?0:a<1?6:a<1000?4:2}); return appliedTransform==="none"&&fmt==="currency"? `$${s}` : s; };
+                  const byYear=(arr)=>new Map((arr||[]).map(d=>[String(d.year),d]));
+                  const cols=varBasket.map((item,i)=>{
+                    const dk=`${item.sourceId}:${item.varCode}`; const s2=ALL_SRCS_MAP[item.sourceId]; const vd=item.sourceId==="__imported__"? null : s2?.vars.find(v=>v.code===item.varCode);
+                    const name=item.label||vd?.name||item.varCode; const dup=varBasket.some(o=>o!==item&&(o.label||o.varCode)===(item.label||item.varCode));
+                    const raw=multiData[dk]||[]; const shown=applyTransform(imputeData(raw,appliedImpute),appliedTransform);
+                    return { dk, name:dup? `${name} (${item.sourceName})` : name, src:item.sourceName||s2?.short||"", fmt:vd?.fmt||item.fmt||"num", color:ACCENT[i%ACCENT.length], hidden:hiddenChartVars.has(dk),
+                      raw:byYear(raw), shown:byYear(shown), cmp:cmpOn&&!source.countryFixed? byYear(applyTransform(imputeData(cmpMultiData[dk]||[],appliedImpute),appliedTransform)) : null, nRaw:raw.length };
+                  });
+                  const years=[...new Set(cols.flatMap(c=>[...c.raw.keys(),...c.shown.keys(),...(c.cmp?[...c.cmp.keys()]:[])]))].sort(ecoTimeCmp);
+                  if(!years.length) return <div style={{padding:"20px",textAlign:"center",color:C.dim,fontFamily:C.mono}}>No data for the variables you selected</div>;
+                  const withRaw=showOriginal&&(appliedTransform!=="none"||appliedImpute!=="none");
+                  const p0=cols[0];
+                  const th={padding:"8px 10px",borderBottom:`1px solid ${C.border}`,textAlign:"right",fontSize:10,whiteSpace:"nowrap"};
+                  const missingCount=(c)=>years.filter(y=>{ const v=c.raw.get(y)?.value; return v==null||!isFinite(v); }).length;
+                  return(<>
+                    <div style={{color:C.dim,fontSize:10.5,fontFamily:C.mono,padding:"6px 12px"}}>{years.length} {freq==="annual"?"years":"periods"} × {cols.length} variable{cols.length===1?"":"s"} · {cc.name}{appliedImpute!=="none"?` · imputed: ${IMPUTE_METHODS.find(m=>m.id===appliedImpute)?.label}`:""}{appliedTransform!=="none"?` · ${TRANSFORMS.find(t=>t.id===appliedTransform)?.label}`:""}</div>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontFamily:C.mono,fontSize:11,minWidth:Math.max(420,160+cols.length*150)}}>
                       <thead>
                         <tr style={{background:C.surface,position:"sticky",top:0,zIndex:1}}>
-                          <th style={{color:C.dim,padding:"8px 12px",borderBottom:`1px solid ${C.border}`,fontWeight:500,textAlign:"left",fontSize:10,textTransform:"uppercase",letterSpacing:"0.1em"}}>Year</th>
-                          {allVarDefs2.map((vd,i)=>(
-                            <React.Fragment key={vd.code}>
-                              <th style={{color:ACCENT[i%ACCENT.length],padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:600,textAlign:"right",fontSize:10,maxWidth:130,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}} title={vd.name}>
-                                ●{i+1} {vd.name.substring(0,14)} [{vd._sourceName||source.short}]
-                              </th>
-                              {showOriginal&&(appliedTransform!=="none"||appliedImpute!=="none")&&(
-                                <th style={{color:C.dim,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:400,textAlign:"right",fontSize:10}}>●{i+1} RAW</th>
-                              )}
+                          <th style={{...th,color:C.dim,padding:"8px 12px",fontWeight:500,textAlign:"left",textTransform:"uppercase",letterSpacing:"0.1em"}}>{importedData?.timeName&&varBasket.every(b=>b.sourceId==="__imported__")? importedData.timeName : "Year"}</th>
+                          {cols.map((c,i)=>(
+                            <React.Fragment key={c.dk}>
+                              <th title={`${c.name}${c.src?` · ${c.src}`:""}`} style={{...th,color:c.color,fontWeight:600,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",opacity:c.hidden?0.55:1}}>●{i+1} {c.name}{c.src?<span style={{color:C.dim,fontWeight:400}}> [{c.src}]</span>:null}</th>
+                              {withRaw&&<th style={{...th,color:C.dim,fontWeight:400}}>●{i+1} original</th>}
+                              {c.cmp&&<th style={{...th,color:C.teal,fontWeight:600}}>●{i+1} {cmpC.name}</th>}
                             </React.Fragment>
                           ))}
-                          {cmpOn&&!source.countryFixed&&<th style={{color:C.teal,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:600,textAlign:"right",fontSize:10}}>vs {cmpC.name}</th>}
-                          <th style={{color:C.dim,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,fontWeight:500,textAlign:"right",fontSize:10,textTransform:"uppercase"}}>Δ YoY (Primary)</th>
+                          <th style={{...th,color:C.dim,fontWeight:500,textTransform:"uppercase"}} title={`Change from the previous period in ${p0?.name}`}>Δ vs previous (●1)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {allYears2.map((year,i)=>{
-                          const prec=allYears2[i-1];
-                          const _ps=tSeries(multiData[varCode]||[],imputeMethod,transform).m;
-                          const cur=_ps.get(String(year));
-                          const prev=_ps.get(String(prec));
-                          const delta=cur?.value!=null&&prev?.value?((cur.value-prev.value)/Math.abs(prev.value)*100):null;
+                        {years.map((y,i)=>{
+                          const cur=p0?.shown.get(y)?.value, prev=i? p0?.shown.get(years[i-1])?.value : null;
+                          const delta=cur!=null&&prev!=null&&isFinite(cur)&&isFinite(prev)&&prev!==0? (cur-prev)/Math.abs(prev)*100 : null;
                           return(
-                            <tr key={year} style={{background:i%2?`${T.surface}88`:"transparent"}}>
-                              <td style={{color:T.mid,padding:"6px 12px",fontWeight:600}}>{year}</td>
-                              {allVarDefs2.map((vd,vi)=>{
-                                const dk2=vd._dk||`${varBasket[vi]?.sourceId||source.id}:${vd.code}`;
-                              const rawS=multiData[dk2]||multiData[vd.code]||[];
-                              const _e=tSeries(rawS,appliedImpute,appliedTransform);
-                                const pt2=_e.m.get(String(year));
-                              const rawPt2=showOriginal?_e.r.get(String(year)):null;
-                              return(<React.Fragment key={vd.code}>
-                                <td style={{color:ACCENT[vi%ACCENT.length],textAlign:"right",padding:"6px 10px",fontWeight:600}}>{pt2?.value!=null?fmtVal(pt2.value,vd.fmt):<span style={{color:C.dim}}>—</span>}</td>
-                                {showOriginal&&(appliedTransform!=="none"||appliedImpute!=="none")&&<td style={{color:C.dim,textAlign:"right",padding:"6px 10px",fontSize:10}}>{rawPt2?.value!=null?fmtVal(rawPt2.value,vd.fmt):<span style={{color:C.dim}}>—</span>}</td>}
-                              </React.Fragment>);
-                              })}
-                              {cmpOn&&!source.countryFixed&&<td style={{color:C.teal,textAlign:"right",padding:"6px 10px"}}>{cmpData.find(d=>d.year===year)?fmtVal(cmpData.find(d=>d.year===year).value,currentVar.fmt):"—"}</td>}
-                              <td style={{color:delta==null?C.dim:delta>=0?C.teal:C.red,textAlign:"right",padding:"6px 10px",fontWeight:600}}>
-                                {delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(2)}%`}
-                              </td>
+                            <tr key={y} style={{background:i%2?`${T.surface}88`:"transparent"}}>
+                              <td style={{color:T.mid,padding:"6px 12px",fontWeight:600,whiteSpace:"nowrap"}}>{y}</td>
+                              {cols.map(c=>{ const v=c.shown.get(y)?.value, rv=c.raw.get(y)?.value; const txt=tfmt(v,c.fmt); const imputed=txt!=null&&(rv==null||!isFinite(rv))&&appliedImpute!=="none";
+                                return(<React.Fragment key={c.dk}>
+                                  <td title={txt==null?"Missing":imputed?"Imputed value":undefined} style={{color:c.color,textAlign:"right",padding:"6px 10px",fontWeight:imputed?400:600,fontStyle:imputed?"italic":"normal",opacity:c.hidden?0.55:1}}>{txt??<span style={{color:C.orange}} aria-label="missing">—</span>}</td>
+                                  {withRaw&&<td style={{color:C.dim,textAlign:"right",padding:"6px 10px",fontSize:10}}>{tfmt(rv,c.fmt)??"—"}</td>}
+                                  {c.cmp&&<td style={{color:C.teal,textAlign:"right",padding:"6px 10px"}}>{tfmt(c.cmp.get(y)?.value,c.fmt)??"—"}</td>}
+                                </React.Fragment>); })}
+                              <td style={{color:delta==null?C.dim:delta>=0?C.teal:C.red,textAlign:"right",padding:"6px 10px",fontWeight:600}}>{delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(2)}%`}</td>
                             </tr>
                           );
                         })}
                       </tbody>
+                      <tfoot>
+                        <tr style={{borderTop:`1px solid ${C.border}`}}>
+                          <td style={{color:C.dim,padding:"6px 12px",fontSize:10,textTransform:"uppercase"}}>Missing</td>
+                          {cols.map(c=>{ const m=missingCount(c); return(<React.Fragment key={c.dk}>
+                            <td style={{color:m?C.orange:C.dim,textAlign:"right",padding:"6px 10px",fontSize:10}}>{m} of {years.length}</td>
+                            {withRaw&&<td/>}{c.cmp&&<td/>}
+                          </React.Fragment>); })}
+                          <td/>
+                        </tr>
+                      </tfoot>
                     </table>
-                  );
+                  </>);
                 })()}
               </div>
             )}
@@ -2031,19 +2068,6 @@ function Dashboard({user, onLogout}) {
               </div>
             );
           })()}
-
-          {/* MISSING DATA TOAST */}
-          {missingAlert&&(
-            <div style={{background:`${C.orange}18`,border:`1px solid ${C.orange}55`,borderRadius:6,padding:"10px 16px",display:"flex",alignItems:"center",gap:12,marginBottom:0}}>
-              <span style={{fontSize:18}}>⚠︎</span>
-              <div style={{flex:1}}>
-                <div style={{color:C.orange,fontSize:12,fontWeight:700}}>Missing Data Detected</div>
-                <div style={{color:C.mid,fontSize:11,fontFamily:C.mono}}>{missingAlert.varName}: {missingAlert.count} of {missingAlert.total} values are missing</div>
-              </div>
-              <button onClick={()=>{setAnalysisTab("impute");}} style={{background:C.orange,color:C.onGold,border:"none",borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",flexShrink:0}}>Apply Imputation →</button>
-              <button onClick={()=>setMissingAlert(null)} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:14}}>✕</button>
-            </div>
-          )}
 
           {/* ECOSCOPE AI — owned statistical engine (free, offline) */}
           <div className="glass-card" style={{...card,background:T.card,border:`1px solid ${C.teal}44`}}>

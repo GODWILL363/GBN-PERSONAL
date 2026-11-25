@@ -40,6 +40,7 @@ const MAIL = require("./mailer")();
 const AUTH = require("./auth_projects")(app, { sbFetch, mail: MAIL });
 require("./library_routes")(app, { sbFetch }); // Data Vault: admin-published datasets for chosen plans and users
 require("./snapshot_routes")(app, { sbFetch });     // My snapshots: saved chart pictures (see snapshot_routes.js)
+require("./news_routes")(app, { sbFetch });         // What's new: update and upgrade notices under the bell (see news_routes.js)
 // AI runs only on the server's key: never store personal Anthropic keys in user settings
 app.use("/api/users", (req, res, next) => { if (req.method === "PATCH" && req.body && req.body.settings && typeof req.body.settings === "object") delete req.body.settings.anthropicKey; next(); });
 // The IESGI platform (open data, public API, citations, partners) is a separate app on the same database: set IESGI_URL to link to it.

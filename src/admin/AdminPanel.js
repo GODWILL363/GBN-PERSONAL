@@ -6,6 +6,7 @@ import { C, COUNTRIES, Ico, PLANS, applyTheme, globalCSS, ink } from "../core/th
 import { AdminSupportInbox } from "../impact/tabs";
 import { btn, inp, pill, sel } from "../ui/login";
 import { AdminVault } from "../vault/vault";
+import { NewsButton } from "../ui/news";
 
 // ══════════════════════════════════════════════
 // MOCK DATA FOR ADMIN
@@ -304,6 +305,7 @@ function AdminPanel({user, onLogout}) {
             <span style={{color:C.dim}}>·</span>
             <span style={{color:C.mid}}>{totalQueries} queries today</span>
           </div>}
+          <NewsButton username={user.username} canPost compact={isMobile}/>
           <div style={{position:"relative"}}>
             <button onClick={()=>setShowUserMenu(v=>!v)} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${showUserMenu?C.gold:C.border}`,borderRadius:6,padding:"5px 14px 5px 6px",cursor:"pointer",transition:"border-color .15s"}}>
               <div style={{width:26,height:26,borderRadius:"50%",background:user.avatarColor||C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#0b0e14"}}>{user.initials||"A"}</div>

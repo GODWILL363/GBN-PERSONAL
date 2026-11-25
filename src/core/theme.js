@@ -178,6 +178,7 @@ const ICONS = {
   arrowup:["M12 19V5","M5 12l7-7 7 7"],
   pencil:["M17 3a2.8 2.8 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5z"],
   compare:["M4 7h15","M15 3l4 4-4 4","M20 17H5","M9 13l-4 4 4 4"],
+  bell:["M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9","M13.7 21a2 2 0 0 1-3.4 0"],
 };
 function Ico({n, s="1.05em", w=1.8, style}){
   const p = ICONS[n]; if(!p) return null;
