@@ -1,4 +1,5 @@
 // workbench/workbench.js — split from App.js (code unchanged; only imports and exports were added)
+import { SNAP, blobToCanvas, copyCanvas, saveCanvas } from "../core/imageExport";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile } from "../core/fetch";
 import { C, Ico } from "../core/theme";
@@ -6,7 +7,7 @@ import { CE_ERRS, FX_ALIAS, FX_COMMANDS, FX_FUNCS, ST_CMDS, ST_GROUPS, ceAddr, c
 import { ciParseCSV } from "../impact/estimators";
 import { FX_GROUPS } from "../impact/tabs";
 import { btn, card, detectTimeColumn, inp, pill, sel } from "../ui/login";
-import { codAllSegments, codDocsFromTable, codKappa, codKappaLabel, codRuleRe, codSuggest, codSummary, codToTable, codTopWords, offTables, prjUid, wbCsv, wbDownload, wxBlockRows, wxDocxSave, wxPdf, wxTexDoc, wxXlsxSave } from "./export";
+import { codAllSegments, codDocsFromTable, codKappa, codKappaLabel, codRuleRe, codSuggest, codSummary, codToTable, codTopWords, offTables, prjUid, wbCsv, wbDownload, wxBlockRows, wxCsvSave, wxDocxSave, wxPptxSave, wxPdf, wxTexDoc, wxXlsxSave } from "./export";
 import { PRJ_BIG_CELLS, TE_OPS, TE_PAGE, prjCells, teBlank, teNum, teTest } from "./storage";
 import { DSB_CAN3D, DsbChart, WbCombine, WbOptimize, dsbModel, dsbTypeOf } from "./tools";
 
@@ -498,6 +499,9 @@ function WbResultChart({ b }) {
   const exportChart=async(kind)=>{ const name=wxSlug(b.title); if (kind==="svg") { const sv=wxChartSvg(boxRef.current); if (!sv) { setXmsg("This chart cannot be saved as SVG; try PNG."); return; } wxSave(new Blob([sv.svg],{ type:"image/svg+xml" }), name+".svg"); return; }
     const im=await wxChartPng(boxRef.current, 3); if (!im) { setXmsg("Could not capture the chart."); return; } if (kind==="png") { wxSave(new Blob([wxDataUrlBytes(im.url)],{ type:"image/png" }), name+".png"); return; }
     if (kind==="docx") { await wxDocxSave([{ title:b.title, blocks:[b] }], { "0-0":im }, name+".docx"); return; } if (kind==="pdf") { if (!wxPdf([{ title:b.title, blocks:[b] }], { "0-0":im })) setXmsg("Allow pop-ups for this site to print or save as PDF."); return; }
+    if (["jpeg","webp","pdfimg","copy","snapshot"].includes(kind)) { const cv=await blobToCanvas(new Blob([wxDataUrlBytes(im.url)],{ type:"image/png" }));
+      if (kind==="copy") { await copyCanvas(cv); setXmsg("Chart copied."); return; } if (kind==="snapshot") { await SNAP.save(cv, b.title); setXmsg("Saved to My snapshots."); return; }
+      await saveCanvas(cv, kind==="pdfimg"? "pdf" : kind, name, { bg:"#ffffff", pxPerPt: 3*96/72 }); return; }
     if (kind==="tex") { setXmsg("Saved the PNG; put it next to your .tex file and use \\includegraphics{"+name+".png}"); wxSave(new Blob([wxDataUrlBytes(im.url)],{ type:"image/png" }), name+".png"); } };
   const base0 = b.t3d && ((three && !/3d$/.test(b.t.type)) || (!three && /3d$/.test(b.t.type))) ? b.t3d : b.t;
   const base = ptype && !(three && b.t3d) ? wbRetype(/3d$/.test(base0.type) && b.t3d ? b.t3d : base0, ptype, b.tab) : base0;
@@ -513,7 +517,7 @@ function WbResultChart({ b }) {
         {[["2D",false],["3D",true]].map(([l,v])=><button key={l} type="button" aria-pressed={three===v} onClick={()=>setThree(v)} style={{ padding:"3px 10px", fontSize:11.5, fontWeight:700, border:"none", cursor:"pointer", background:three===v? C.gold : "transparent", color:three===v? C.onAccent||"#fff" : C.mid }}>{l}</button>)}</div>}
       <span style={{ fontSize:11, color:C.dim }}>{is3? "Drag to turn · wheel to zoom" : "Hover for values · click legend items to hide them"}</span>
       <select aria-label={`Export chart ${b.title}`} value="" onChange={e=>{ const k=e.target.value; e.target.value=""; if (k) exportChart(k).catch(er=>setXmsg("Export failed: "+er.message)); }} style={{ ...sel, width:"auto", padding:"3px 8px", fontSize:11.5 }}>
-        <option value="">Export chart…</option><option value="png">PNG image</option><option value="svg">SVG (sharp in Word and LaTeX)</option><option value="docx">Word (.docx)</option><option value="pdf">PDF (print)</option><option value="tex">For LaTeX (PNG + code)</option></select>
+        <option value="">Export chart…</option><option value="png">PNG image</option><option value="jpeg">JPEG image</option><option value="webp">WebP image</option><option value="svg">SVG (sharp in Word and LaTeX)</option><option value="pdfimg">PDF file</option><option value="docx">Word (.docx)</option><option value="pdf">PDF (print view)</option><option value="copy">Copy to clipboard</option><option value="snapshot">Save to My snapshots</option><option value="tex">For LaTeX (PNG + code)</option></select>
     </div>
     {xmsg && <p role="status" style={{ ...wbNote, margin:"0 0 4px", fontSize:11.5 }}>{xmsg}</p>}
     <div ref={boxRef}><DsbChart t={t} m={m} height={big? Math.max(360, (typeof window!=="undefined"? window.innerHeight : 800) - 140) : 340}/></div>
@@ -528,10 +532,13 @@ function WbResults({ outs, onClear, addDataset, goLine }) {
     if (kind==="tex") { wxSave(new Blob([stTexTable(b,{ caption:b.caption||"" })+"\n"],{ type:"text/x-tex" }), name+".tex"); return; }
     if (kind==="xlsx") { await wxXlsxSave([{ title:o.title.replace(/^to_/,""), rows:wxBlockRows(b) }], name+".xlsx"); return; }
     if (kind==="docx") { await wxDocxSave([one], {}, name+".docx"); return; }
+    if (kind==="csv") { wxCsvSave([one], name+".csv"); return; } if (kind==="pptx") { await wxPptxSave([one], {}, name+".pptx", o.title); return; }
     if (kind==="pdf") { if (!wxPdf([one], {})) say("Allow pop-ups for this site to print or save as PDF."); } };
   const exportAll=async(kind)=>{ setBusy(true); try { const title="EcoScript results"; const stamp=new Date().toISOString().slice(0,10);
       if (kind==="xlsx") { await wxXlsxSave(outs.map(o=>({ title:`L${o.line} ${o.title.replace(/^to_/,"").split(/\s/)[0]}`, rows:[[o.title], ...o.blocks.flatMap(b=>[...wxBlockRows(b), []])] })), `ecoscript-results-${stamp}.xlsx`); say("Excel file saved: one sheet per result."); return; }
+      if (kind==="csv") { wxCsvSave(outs, `ecoscript-results-${stamp}.csv`); say("CSV saved: every table, one after another."); return; }
       const imgs=await grabImgs();
+      if (kind==="pptx") { await wxPptxSave(outs, imgs, `ecoscript-results-${stamp}.pptx`, title); say("PowerPoint saved: one slide per table and chart."); return; }
       if (kind==="docx") { await wxDocxSave(outs, imgs, `ecoscript-results-${stamp}.docx`, title); say("Word file saved with every table and chart."); return; }
       if (kind==="pdf") { if (!wxPdf(outs, imgs, title)) say("Allow pop-ups for this site, then try again."); else say("Print window opened: choose Save as PDF."); return; }
       if (kind==="tex") { const Z=await wxZip(); const zip=new Z(); const figs={}; Object.entries(imgs).forEach(([key,im],q)=>{ const fn=`figures/chart${q+1}.png`; zip.file(fn, wxDataUrlBytes(im.url)); figs[key]=fn; }); zip.file("results.tex", wxTexDoc(outs, figs)); wxSave(await zip.generateAsync({ type:"blob" }), `ecoscript-results-${stamp}.zip`); say("LaTeX .zip saved (results.tex + figures). Upload it to Overleaf as a new project."); } }
@@ -541,7 +548,7 @@ function WbResults({ outs, onClear, addDataset, goLine }) {
   return <div ref={rootRef} style={{ display:"flex", flexDirection:"column", gap:10 }}>
     <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}><span style={{ fontSize:12, color:C.mid }}>{outs.length} result{outs.length>1? "s" : ""}, in script order</span>
       <select aria-label="Export all results" value="" disabled={busy} onChange={e=>{ const k=e.target.value; e.target.value=""; if (k) exportAll(k); }} style={{ ...sel, width:"auto", padding:"4px 8px", fontSize:12, marginLeft:"auto" }}>
-        <option value="">{busy? "Exporting…" : "Export all results…"}</option><option value="docx">Word (.docx), tables and charts</option><option value="pdf">PDF (print view)</option><option value="tex">LaTeX (.zip for Overleaf)</option><option value="xlsx">Excel (.xlsx), one sheet per result</option></select>
+        <option value="">{busy? "Exporting…" : "Export all results…"}</option><option value="docx">Word (.docx), tables and charts</option><option value="pdf">PDF (print view)</option><option value="tex">LaTeX (.zip for Overleaf)</option><option value="xlsx">Excel (.xlsx), one sheet per result</option><option value="pptx">PowerPoint (.pptx), one slide each</option><option value="csv">CSV, all tables</option></select>
       <button type="button" style={wbSmallBtn()} onClick={onClear}>Clear results</button></div>
     {xmsg && <p role="status" style={{ ...wbNote, margin:0, fontSize:12, color:/failed|blocked|Allow/.test(xmsg)? C.red : C.teal }}>{xmsg}</p>}
     {outs.map((o,k)=><section key={k} aria-label={o.title} style={{ border:`1px solid ${C.border}`, borderRadius:8, background:C.card, overflow:"hidden" }}>
@@ -559,7 +566,7 @@ function WbResults({ outs, onClear, addDataset, goLine }) {
             <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:4 }}>{b.caption && <span style={{ fontSize:12, fontWeight:600, color:C.text }}>{b.caption}</span>}
               <button type="button" style={{ ...wbSmallBtn(), padding:"2px 8px", fontSize:11, marginLeft:"auto" }} onClick={()=>{ wbCopy(wbTsv(b)).then(ok=>{ setCopied(ok? `${k}-${i}` : `x${k}-${i}`); setTimeout(()=>setCopied(""),2200); }); }}>{copied===`${k}-${i}`? "Copied" : copied===`x${k}-${i}`? "Copy blocked: select the table" : "Copy"}</button>
               <select aria-label={`Export table ${b.caption||o.title}`} value="" onChange={e=>{ const kd=e.target.value; e.target.value=""; if (kd) exportTable(kd,o,b).catch(er=>say("Export failed: "+er.message)); }} style={{ ...sel, width:"auto", padding:"2px 6px", fontSize:11 }}>
-                <option value="">Export…</option><option value="texcopy">LaTeX (copy)</option><option value="tex">LaTeX (.tex)</option><option value="xlsx">Excel (.xlsx)</option><option value="docx">Word (.docx)</option><option value="pdf">PDF (print)</option></select>
+                <option value="">Export…</option><option value="texcopy">LaTeX (copy)</option><option value="tex">LaTeX (.tex)</option><option value="xlsx">Excel (.xlsx)</option><option value="csv">CSV</option><option value="docx">Word (.docx)</option><option value="pptx">PowerPoint (.pptx)</option><option value="pdf">PDF (print)</option></select>
               {addDataset && <button type="button" style={{ ...wbSmallBtn(C.teal), padding:"2px 8px", fontSize:11 }} onClick={()=>addDataset({ name:`${o.title.slice(0,50)}${b.caption? " · "+b.caption : ""}`, headers:b.head.map((h,j)=>String(h||"").replace(/\n/g," ") || (j? `col${j}` : "label")), rows:b.rows.map(r=>r.map(c=>String(c??"").replace(/\n/g," "))), source:"EcoScript result" })}>Save as dataset</button>}</div>
             <div style={{ overflow:"auto", maxHeight:420, border:`1px solid ${C.border}`, borderRadius:6 }}>
               <table style={{ borderCollapse:"collapse", width:"100%", fontSize:12.5, fontVariantNumeric:"tabular-nums" }}>

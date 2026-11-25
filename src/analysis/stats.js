@@ -1,4 +1,5 @@
 // analysis/stats.js — split from App.js (code unchanged; only imports and exports were added)
+import { SNAP, copyCanvas, saveCanvas } from "../core/imageExport";
 import { fmtVal, htmlEsc } from "../core/fetch";
 import { C } from "../core/theme";
 import { meDagAnalysis } from "../impact/estimators";
@@ -413,8 +414,8 @@ const downloadDAG = (format) => {
   img.onerror=()=>{URL.revokeObjectURL(url);alert("PNG export failed — try SVG.");};
   img.src=url;
 };
-const exportChart = async (format, title) => {
-  // Load html2canvas from CDN for reliable pixel-perfect capture
+// capture the dashboard chart with a title bar and source line; returns { canvas, svgText }
+const captureChart = async (title) => {
   const loadHtml2Canvas = () => new Promise((res,rej)=>{
     if(window.html2canvas) return res(window.html2canvas);
     const s=document.createElement('script');
@@ -423,109 +424,46 @@ const exportChart = async (format, title) => {
     s.onerror=()=>rej(new Error('Failed to load html2canvas'));
     document.head.appendChild(s);
   });
-
   const chartDiv = document.getElementById('ecoscope-chart-area');
-  if(!chartDiv){ alert('No chart found — load data first'); return; }
-
-  // SVG export: serialize the Recharts SVG directly
-  if(format==='svg'){
-    const svg=chartDiv.querySelector('svg');
-    if(!svg){ alert('No SVG chart found'); return; }
-    const W=svg.clientWidth||700, H=svg.clientHeight||350;
-    const PAD=44, FOOT=20, TH=H+PAD+FOOT;
-    const inner=(new XMLSerializer().serializeToString(svg))
-      .replace(/<svg[^>]*>/,'').replace('</svg>','');
-    const doc=`<?xml version="1.0" encoding="UTF-8"?>
+  if(!chartDiv) throw new Error('No chart found. Load data first.');
+  const t=(title||'EcoScope Chart').substring(0,72), when=new Date().toLocaleDateString();
+  const SOURCE='Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG · UNDP · Heritage · WIPO · IEP';
+  // vector version (used for SVG)
+  let svgText=null; const svg=chartDiv.querySelector('svg');
+  if(svg){ const W=svg.clientWidth||700, H=svg.clientHeight||350, PAD=44, FOOT=20, TH=H+PAD+FOOT;
+    const inner=(new XMLSerializer().serializeToString(svg)).replace(/<svg[^>]*>/,'').replace('</svg>','');
+    svgText=`<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${TH}">
   <style>text,tspan{font-family:Arial,sans-serif!important}</style>
   <rect width="${W}" height="${TH}" fill="${C.bg}"/>
   <rect width="${W}" height="${PAD}" fill="${C.surface}"/>
   <line x1="0" y1="${PAD}" x2="${W}" y2="${PAD}" stroke="${C.border}" stroke-width="1"/>
-  <text x="14" y="20" fill="${C.gold}" font-size="13" font-weight="bold" font-family="IBM Plex Sans,Arial,sans-serif">${(title||'EcoScope').replace(/&/g,'&amp;').replace(/</g,'&lt;').substring(0,72)}</text>
-  <text x="14" y="36" fill="${C.dim}" font-size="9" font-family="IBM Plex Sans,Arial,sans-serif">EcoScope — Global Economic Intelligence · ${new Date().toLocaleDateString()}</text>
+  <text x="14" y="20" fill="${C.gold}" font-size="13" font-weight="bold" font-family="IBM Plex Sans,Arial,sans-serif">${htmlEsc(t)}</text>
+  <text x="14" y="36" fill="${C.dim}" font-size="9" font-family="IBM Plex Sans,Arial,sans-serif">EcoScope — Global Economic Intelligence · ${when}</text>
   <g transform="translate(0,${PAD})">${inner}</g>
-  <text x="14" y="${TH-6}" fill="${C.dim}" font-size="8" font-family="IBM Plex Sans,Arial,sans-serif">Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG · UNDP · Heritage · WIPO · IEP</text>
-</svg>`;
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(new Blob([doc],{type:'image/svg+xml;charset=utf-8'}));
-    a.download=(title||'ecoscope').replace(/[^a-zA-Z0-9_-]/g,'_').substring(0,50)+'.svg';
-    a.click(); return;
-  }
-
-  // PNG: use html2canvas for pixel-perfect capture
-  try {
-    const h2c=await loadHtml2Canvas();
-    const SCALE=2;
-    const PAD=56, FOOT=26;
-    const cw=chartDiv.clientWidth||700;
-    const ch=chartDiv.clientHeight||350;
-
-    // Capture the chart div
-    const chartCanvas=await h2c(chartDiv,{
-      backgroundColor:C.bg,scale:SCALE,
-      useCORS:true,allowTaint:true,
-      logging:false,
-    });
-
-    // Compose final canvas with title bar + chart + footer
-    const final=document.createElement('canvas');
-    final.width=(cw)*SCALE;
-    final.height=(ch+PAD+FOOT)*SCALE;
-    const ctx=final.getContext('2d');
-    ctx.scale(SCALE,SCALE);
-
-    // Background
-    ctx.fillStyle=C.bg; ctx.fillRect(0,0,cw,ch+PAD+FOOT);
-
-    // Title bar
-    ctx.fillStyle=C.surface; ctx.fillRect(0,0,cw,PAD-4);
-    ctx.fillStyle=C.border; ctx.fillRect(0,PAD-4,cw,1);
-
-    // Title text
-    ctx.fillStyle=C.gold; ctx.font='600 14px "IBM Plex Sans", Arial, sans-serif';
-    ctx.fillText((title||'EcoScope Chart').substring(0,70), 14, 22);
-
-    // Subtitle
-    ctx.fillStyle=C.dim; ctx.font='11px "IBM Plex Sans", Arial, sans-serif';
-    ctx.fillText('EcoScope — Global Economic Intelligence Platform · '+new Date().toLocaleDateString(), 14, 40);
-
-    // Draw chart (unscaled since h2c already scaled)
-    ctx.resetTransform();
-    ctx.drawImage(chartCanvas, 0, PAD*SCALE);
-    ctx.scale(SCALE,SCALE);
-
-    // Footer
-    ctx.fillStyle=C.dim; ctx.font='10px "IBM Plex Sans", Arial, sans-serif';
-    ctx.fillText('Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG · UNDP · Heritage · WIPO · IEP', 14, ch+PAD+FOOT-6);
-
-    // Download
-    const a=document.createElement('a');
-    a.href=final.toDataURL('image/png',1.0);
-    a.download=(title||'ecoscope').replace(/[^a-zA-Z0-9_-]/g,'_').substring(0,50)+'.png';
-    a.click();
-
-  } catch(e){
-    console.error('Export error:',e);
-    // Fallback: print dialog
-    const w=window.open('','_blank','width=900,height=600');
-    if(w){
-      const svg=chartDiv.querySelector('svg');
-      const svgHtml=svg?svg.outerHTML:'<p>No chart</p>';
-      w.document.write(`<!DOCTYPE html><html><head><title>${htmlEsc(title||'EcoScope Chart')}</title>
-        <style>
-          body{margin:0;background:#fff;color:#101828;font-family:'IBM Plex Sans',Arial,sans-serif;padding:24px}
-          h3{color:#101828;font-weight:600;margin:0 0 8px}
-          p{color:#5d6879;font-size:10px;margin:8px 0 0}
-          
-        </style></head><body>
-        <h3>${(title||'EcoScope Chart').replace(/</g,'&lt;')}</h3>
-        ${svgHtml}
-        <p>Source: World Bank · IMF · FRED · WHO · ILO · UNESCO · FAO · UN SDG | EcoScope ${new Date().getFullYear()}</p>
-        <script>setTimeout(()=>window.print(),600)</script>
-      </body></html>`);
-      w.document.close();
-    }
-  }
+  <text x="14" y="${TH-6}" fill="${C.dim}" font-size="8" font-family="IBM Plex Sans,Arial,sans-serif">${SOURCE}</text>
+</svg>`; }
+  // pixel version (used for PNG, JPEG, WebP, PDF, copy and snapshots)
+  const h2c=await loadHtml2Canvas(); const SCALE=2, PAD=56, FOOT=26; const cw=chartDiv.clientWidth||700, ch=chartDiv.clientHeight||350;
+  const chartCanvas=await h2c(chartDiv,{ backgroundColor:C.bg, scale:SCALE, useCORS:true, allowTaint:true, logging:false });
+  const final=document.createElement('canvas'); final.width=cw*SCALE; final.height=(ch+PAD+FOOT)*SCALE;
+  const ctx=final.getContext('2d'); ctx.scale(SCALE,SCALE);
+  ctx.fillStyle=C.bg; ctx.fillRect(0,0,cw,ch+PAD+FOOT);
+  ctx.fillStyle=C.surface; ctx.fillRect(0,0,cw,PAD-4); ctx.fillStyle=C.border; ctx.fillRect(0,PAD-4,cw,1);
+  ctx.fillStyle=C.gold; ctx.font='600 14px "IBM Plex Sans", Arial, sans-serif'; ctx.fillText(t.substring(0,70), 14, 22);
+  ctx.fillStyle=C.dim; ctx.font='11px "IBM Plex Sans", Arial, sans-serif'; ctx.fillText('EcoScope — Global Economic Intelligence Platform · '+when, 14, 40);
+  ctx.resetTransform(); ctx.drawImage(chartCanvas, 0, PAD*SCALE); ctx.scale(SCALE,SCALE);
+  ctx.fillStyle=C.dim; ctx.font='10px "IBM Plex Sans", Arial, sans-serif'; ctx.fillText(SOURCE, 14, ch+PAD+FOOT-6);
+  return { canvas: final, svgText };
 };
 
-export { AGG_METHODS, IMPUTE_METHODS, NORM_METHODS, TRANSFORMS, applyTransform, buildComposite, dagBackdoorSet, dagHasCycle, dagPaths, downloadDAG, exportChart, generateEcoScopeAnalysis, histogram, imputeData, normalCurve, olsRegression, skewNormalCurve, summaryStats };
+// format: png | jpeg | webp | svg | pdf | copy | snapshot. Returns a short message for the screen.
+const exportChart = async (format, title, meta) => {
+  if(format==='svg'){ const chartDiv=document.getElementById('ecoscope-chart-area'); const svg=chartDiv&&chartDiv.querySelector('svg'); if(!svg) throw new Error('No SVG chart found. Choose PNG or PDF.'); }
+  const { canvas, svgText } = await captureChart(title);
+  if(format==='copy'){ await copyCanvas(canvas); return 'Chart copied. Paste it into Word, PowerPoint, email or chat.'; }
+  if(format==='snapshot'){ await SNAP.save(canvas, title, meta); return 'Saved to My snapshots.'; }
+  await saveCanvas(canvas, format, title, { svgText, bg: C.bg });
+  return null;
+};
+export { captureChart, AGG_METHODS, IMPUTE_METHODS, NORM_METHODS, TRANSFORMS, applyTransform, buildComposite, dagBackdoorSet, dagHasCycle, dagPaths, downloadDAG, exportChart, generateEcoScopeAnalysis, histogram, imputeData, normalCurve, olsRegression, skewNormalCurve, summaryStats };

@@ -572,7 +572,7 @@ function ProjectsModal({ projects, activeId, activeRole="owner", me, startTab="p
 }
 // Share a project: invite by username or email as viewer or editor, change roles, remove people
 function ShareDialog({ project, me, onClose }) {
-  const [data,setData]=useState(null); const [err,setErr]=useState(""); const [who,setWho]=useState(""); const [role,setRole]=useState("editor"); const [busy,setBusy]=useState(false); const [ok,setOk]=useState(""); const [ask,setAsk]=useState(null);
+  const [data,setData]=useState(null); const [err,setErr]=useState(""); const [who,setWho]=useState(""); const [role,setRole]=useState("editor"); const [busy,setBusy]=useState(false); const [ok,setOk]=useState(""); const [ask,setAsk]=useState(null); const [link,setLink]=useState("");
   const load=useCallback(async()=>{ try { setData(await US.projectMembers(project.id)); } catch(e){ setErr(e.message); } },[project.id]);
   useEffect(()=>{ load(); },[load]);
   useEffect(()=>{ const k=(e)=>{ if (e.key==="Escape"){ e.stopImmediatePropagation(); onClose(); } }; window.addEventListener("keydown",k,true); return ()=>window.removeEventListener("keydown",k,true); },[onClose]);
@@ -584,8 +584,9 @@ function ShareDialog({ project, me, onClose }) {
           <h2 id="share-title" style={{ fontSize:16, margin:0, color:C.text }}>Share "{project.name}"</h2>
           <button type="button" onClick={onClose} aria-label="Close" style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:6, color:C.mid, cursor:"pointer", padding:"4px 9px" }}>✕</button>
         </div>
-        <p style={{ ...wbNote, margin:"6px 0 12px" }}>Invite people who have an EcoScope account. <strong>Can edit</strong>: they open the project and their changes are saved to it. <strong>Can view</strong>: they can open and explore, but nothing they do is saved. Only you can rename, share or delete it.</p>
-        <form onSubmit={e=>{ e.preventDefault(); if (!who.trim()) return; act(async()=>{ const r=await US.projectInvite(project.id, who.trim(), role); setWho(""); return r; }, (r)=>`Shared with the account "${r && r.username || who.trim()}"${r && r.email? ` (${r.email})` : ""}. When they sign in as ${r && r.username || who.trim()} and open Projects, it is under "Shared with me".`); }}
+        <p style={{ ...wbNote, margin:"6px 0 12px" }}>Invite people by username, or by email address: someone without an account gets an emailed invitation and joins straight into this project. <strong>Can edit</strong>: they open the project and their changes are saved to it. <strong>Can view</strong>: they can open and explore, but nothing they do is saved. Only you can rename, share or delete it.</p>
+        <form onSubmit={e=>{ e.preventDefault(); if (!who.trim()) return; act(async()=>{ const r=await US.projectInvite(project.id, who.trim(), role); setWho(""); return r; }, (r)=>{ if (r && r.invited) { if (r.invite_link) setLink(r.invite_link); return r.emailed? `Invitation emailed to ${r.email}. When they accept it, the project is under "Shared with me".` : `${r.email} has no account yet, and the email could not be sent. Copy the link below and send it to them yourself.`; }
+            return `Shared with the account "${r && r.username || who.trim()}"${r && r.email? ` (${r.email})` : ""}${r && r.emailed? ". They were emailed" : ""}. It is under "Shared with me" when they open Projects.`; }); }}
           style={{ display:"grid", gridTemplateColumns:"1fr auto auto", gap:6 }}>
           <input aria-label="Username or email" value={who} onChange={e=>setWho(e.target.value)} placeholder="Username or email" style={{ ...inp, padding:"8px 10px" }}/>
           <select aria-label="Access" value={role} onChange={e=>setRole(e.target.value)} style={{ ...sel, width:"auto", padding:"8px 10px" }}><option value="editor">Can edit</option><option value="viewer">Can view</option></select>
@@ -593,11 +594,12 @@ function ShareDialog({ project, me, onClose }) {
         </form>
         {err && <div role="alert" style={{ color:C.red, fontSize:12, marginTop:8 }}>{err}</div>}
         {ok && <div role="status" style={{ color:C.teal, fontSize:12, marginTop:8 }}>{ok}</div>}
+        {link && <div style={{ display:"flex", gap:6, marginTop:6 }}><input readOnly aria-label="Invitation link" value={link} onFocus={e=>e.target.select()} style={{ ...inp, padding:"6px 8px", fontSize:11.5 }}/><button type="button" onClick={()=>{ try { navigator.clipboard.writeText(link); setOk("Link copied."); } catch(e){} }} style={wbSmallBtn()}>Copy</button></div>}
         <h3 style={{ ...wbH, marginTop:16 }}>People with access</h3>
         {!data? <div style={wbNote}>Loading…</div> : <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
           <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, color:C.text, padding:"6px 0", borderBottom:`1px solid ${C.border}` }}><span>{data.owner}{data.owner===me? " (you)" : ""}</span><span style={{ color:C.mid }}>Owner</span></div>
           {data.members.map(m=><div key={m.username} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, fontSize:13, color:C.text, padding:"4px 0", borderBottom:`1px solid ${C.border}` }}>
-            <span style={{ minWidth:0 }}><strong>{m.username}</strong>{m.email? <span style={{ fontSize:11, color:C.mid }}> · {m.email}</span> : null}{m.invited_by? <span style={{ fontSize:11, color:C.dim }}> · added by {m.invited_by}</span> : null}</span>
+            <span style={{ minWidth:0 }}><strong>{m.pending && m.email? m.email : m.username}</strong>{m.pending? <span style={{ fontSize:11, color:C.gold }}> · invitation sent</span> : null}{m.email && !m.pending? <span style={{ fontSize:11, color:C.mid }}> · {m.email}</span> : null}{m.invited_by? <span style={{ fontSize:11, color:C.dim }}> · added by {m.invited_by}</span> : null}</span>
             <span style={{ display:"flex", gap:6, alignItems:"center" }}>
               <select aria-label={`Access for ${m.username}`} value={m.role} disabled={busy} onChange={e=>{ const r=e.target.value; act(()=>US.projectSetRole(project.id, m.username, r), `${m.username} ${r==="editor"? "can now edit" : "can now only view"}.`); }} style={{ ...sel, width:"auto", padding:"4px 8px", fontSize:12 }}><option value="editor">Can edit</option><option value="viewer">Can view</option></select>
               {ask===m.username? <><span style={{ fontSize:12, color:C.text }}>Remove?</span><button type="button" aria-label={`Yes, remove ${m.username}`} disabled={busy} onClick={()=>{ setAsk(null); act(()=>US.projectRemoveMember(project.id, m.username), `Removed ${m.username}. The project is no longer shared with them.`); }} style={{ ...wbSmallBtn(C.red), background:`${C.red}22` }}>Yes, remove</button><button type="button" onClick={()=>setAsk(null)} style={wbSmallBtn()}>Cancel</button></>

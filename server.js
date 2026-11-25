@@ -36,8 +36,10 @@ app.use((req, res, next) => {
 // SIGNED SESSIONS · ROUTE PROTECTION · PROJECTS  (see auth_projects.js)
 // Must stay above every /api route.
 // ════════════════════════════════════════════════════════════════════════════
-require("./auth_projects")(app, { sbFetch });
+const MAIL = require("./mailer")();
+const AUTH = require("./auth_projects")(app, { sbFetch, mail: MAIL });
 require("./library_routes")(app, { sbFetch }); // Data Vault: admin-published datasets for chosen plans and users
+require("./snapshot_routes")(app, { sbFetch });     // My snapshots: saved chart pictures (see snapshot_routes.js)
 // AI runs only on the server's key: never store personal Anthropic keys in user settings
 app.use("/api/users", (req, res, next) => { if (req.method === "PATCH" && req.body && req.body.settings && typeof req.body.settings === "object") delete req.body.settings.anthropicKey; next(); });
 // The IESGI platform (open data, public API, citations, partners) is a separate app on the same database: set IESGI_URL to link to it.
@@ -151,22 +153,16 @@ app.post("/api/users/invite", async (req, res) => {
   const email = String(req.body?.email || "").trim().toLowerCase(); const role = req.body?.role === "admin" ? "admin" : "user";
   if (!/^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: "A valid email is required" });
   try {
-    const existing = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${encodeURIComponent(email)}&select=id`);
-    if (Array.isArray(existing) && existing.length > 0) return res.status(409).json({ error: "Email already registered" });
-    const token = crypto.randomBytes(20).toString("hex");
-    const user = {
-      id: Date.now().toString(36) + Math.random().toString(36).slice(2),
-      username: "invited_" + token.slice(0, 6),
-      email, password_hash: "invite_" + token,
-      role, plan: "free", plan_status: "invited",
-      country: "GH", settings: {},
-      created_at: new Date().toISOString(),
-      invite_token: token,
-    };
-    const created = await sbFetch("POST", "ecoscope_users", user);
-    await logActivity("admin", "Invite Sent", `${email} invited as ${role}`);
-    res.json({ user: Array.isArray(created) ? created[0] : created, token });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const existing = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${encodeURIComponent(email)}&select=id,plan_status`);
+    const ex = Array.isArray(existing) ? existing[0] : null;
+    if (ex && ex.plan_status !== "invited") return res.status(409).json({ error: "Email already registered" });
+    // a pending invitation is sent again with a fresh link
+    const token = ex ? await AUTH.renewInvite(ex) : (await AUTH.createInvited(email, role, req.auth ? req.auth.username : "admin")).invite_token;
+    const link = MAIL.link(req, `invite=${token}`);
+    const mailed = await MAIL.invite(email, req.auth ? req.auth.username : "The EcoScope team", link, 14);
+    await logActivity(req.auth ? req.auth.username : "admin", "Invite Sent", `${email} invited as ${role}${mailed.sent ? " (emailed)" : " (link only)"}`);
+    res.json({ ok: true, email, role, token, emailed: mailed.sent, renewed: !!ex });
+  } catch (e) { console.error("[invite]", e.message); res.status(500).json({ error: "Could not create the invitation. Please try again." }); }
 });
 
 // Set plan
@@ -375,4 +371,5 @@ app.listen(PORT, () => {
   testSupabase();
   console.log(`  Supabase:  ${SUPABASE_URL ? "✓ configured" : "✗ missing — users won't persist cross-device"}`);
   console.log(`  Anthropic: ${ANTHROPIC_KEY ? "✓ configured" : "✗ missing"}`);
+  console.log(`  Email:     ${MAIL.enabled ? `✓ Resend (${process.env.MAIL_FROM || "onboarding@resend.dev"})` : "✗ RESEND_API_KEY missing: reset and invite emails are not sent"}`);
 });

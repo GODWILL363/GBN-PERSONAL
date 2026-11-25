@@ -8,7 +8,8 @@
 const crypto = require("crypto");
 const express = require("express");
 
-module.exports = function registerAuthProjects(app, { sbFetch }) {
+module.exports = function registerAuthProjects(app, { sbFetch, mail }) {
+  const MAIL = mail || require("./mailer")();
   const SECRET = process.env.SESSION_SECRET || crypto.createHash("sha256").update((process.env.SUPABASE_KEY || "dev") + "|ecoscope-session-v1").digest("hex");
   const TTL_DAYS = 30;
   const b64 = (s) => Buffer.from(s).toString("base64url");
@@ -24,7 +25,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
 
   // ── 1. Attach a token to successful sign-in / registration responses ──
   app.use((req, res, next) => {
-    if (req.method === "POST" && (req.path === "/api/auth/login" || req.path === "/api/auth/register" || req.path === "/api/auth/accept-invite")) {
+    if (req.method === "POST" && (req.path === "/api/auth/login" || req.path === "/api/auth/register" || req.path === "/api/auth/accept-invite" || req.path === "/api/auth/reset")) {
       const json = res.json.bind(res);
       res.json = (body) => { if (res.statusCode < 300 && body && body.user && body.user.username) body.token = issue(body.user); return json(body); };
     }
@@ -52,7 +53,7 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
   const forgetUser = (username) => LIVE.delete(username);
 
   // ── 3. Route rules ──
-  const PUBLIC = [["POST", /^\/api\/auth\/(login|register|accept-invite)$/], ["GET", /^\/api\/auth\/invite\/[a-f0-9]{40}$/], ["GET", /^\/api\/health$/], ["GET", /^\/api\/proxy-data$/]];
+  const PUBLIC = [["POST", /^\/api\/auth\/(login|register|accept-invite|forgot|reset)$/], ["GET", /^\/api\/auth\/(invite\/[a-f0-9]{40}|reset\/[a-f0-9]{64})$/], ["GET", /^\/api\/health$/], ["GET", /^\/api\/proxy-data$/]];
   const ADMIN = [["GET", /^\/api\/users$/], ["DELETE", /^\/api\/users\/[^/]+$/], ["POST", /^\/api\/users\/invite$/], ["POST", /^\/api\/users\/[^/]+\/plan$/],
                  ["GET", /^\/api\/activity$/], ["GET", /^\/api\/requests$/], ["PATCH", /^\/api\/requests\/[^/]+$/], ["GET", /^\/api\/support\/threads$/], ["POST", /^\/api\/support\/status$/]];
   const deny = (res, code, msg, kind) => res.status(code).json({ error: msg, code: kind });
@@ -164,8 +165,54 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       const upd = await sbFetch("PATCH", "ecoscope_users", { username, password_hash: await hashPw(password), plan_status: "active", invite_token: null, last_login: now }, `?id=eq.${enc(u.id)}&plan_status=eq.invited`);
       const nu = Array.isArray(upd) ? upd[0] : null; if (!nu) return res.status(409).json({ error: "This invitation was already used." });
       forgetUser(u.username); await logAct(username, "Invitation accepted", `Account set up · ${u.email}`, req.ip);
+      // projects shared with this email before the account existed now belong to the chosen username
+      try { await sbFetch("PATCH", "ecoscope_project_members", { username }, `?username=eq.${enc(u.username)}`); } catch (e) { console.error("[invite] move memberships:", e.message); }
       const { password_hash, invite_token, ...safe } = nu; res.json({ user: safe });
     } catch (e) { console.error("[invite] accept:", e.message); res.status(500).json({ error: "Could not finish setting up the account. Please try again." }); } });
+
+  // ── invited accounts created by an admin or by someone sharing a project ──
+  const createInvited = async (email, role, by) => { const token = crypto.randomBytes(20).toString("hex"); const now = new Date().toISOString();
+    const row = { id: Date.now().toString(36) + crypto.randomBytes(5).toString("hex"), username: "invited_" + token.slice(0, 8), email, password_hash: "invite_" + token,
+      role: role === "admin" ? "admin" : "user", plan: "free", plan_status: "invited", country: "GH", settings: {}, created_at: now, invite_token: token };
+    const out = await sbFetch("POST", "ecoscope_users", row); if (!Array.isArray(out) || !out[0]) throw new Error(`could not create the invited account: ${JSON.stringify(out).slice(0, 160)}`);
+    await logAct(by, "Invite created", `${email} (${row.role})`); return row; };
+  // a pending invitation is renewed (new link, 14 more days) when it is sent again
+  const renewInvite = async (u) => { const token = crypto.randomBytes(20).toString("hex");
+    await sbFetch("PATCH", "ecoscope_users", { invite_token: token, password_hash: "invite_" + token, created_at: new Date().toISOString() }, `?id=eq.${enc(u.id)}&plan_status=eq.invited`); return token; };
+
+  // ── forgotten password: an emailed link (one use, 60 minutes) leads to /?reset=<token> ──
+  const RESET_MIN = 60; const sha = (x) => crypto.createHash("sha256").update(String(x)).digest("hex");
+  const RESETS = new Map(); const resetLimited = (k, n) => { const now = Date.now(); const f = RESETS.get(k); if (!f || now - f.t > 3600e3) { RESETS.set(k, { t: now, n: 1 }); return false; } f.n++; if (RESETS.size > 20000) RESETS.clear(); return f.n > n; };
+  const RESET_SENT = "If an account uses that email, a reset link is on its way. Check your inbox and spam folder; the link expires in 60 minutes.";
+  app.post("/api/auth/forgot", async (req, res) => {
+    try { const who = clean(req.body?.email, 254).toLowerCase(); if (!who) return res.status(400).json({ error: "Enter your email or username." });
+      // 3 requests per hour for one email, 10 per address: stops anyone flooding an inbox
+      if (resetLimited(`e:${who}`, 3) || resetLimited(`i:${req.ip}`, 10)) return res.json({ ok: true, message: RESET_SENT });
+      const like = (v) => enc(v.replace(/[%_\\]/g, "\\$&"));
+      let list = await sbFetch("GET", "ecoscope_users", null, who.includes("@") ? `?email=ilike.${like(who)}&select=id,username,email,plan_status` : `?username=ilike.${like(who)}&select=id,username,email,plan_status`);
+      list = (Array.isArray(list) ? list : []).filter(u => u.email && u.plan_status !== "invited" && u.plan_status !== "suspended").slice(0, 3);
+      for (const u of list) { const token = crypto.randomBytes(32).toString("hex");
+        await sbFetch("PATCH", "ecoscope_users", { reset_token_hash: sha(token), reset_expires: new Date(Date.now() + RESET_MIN * 60e3).toISOString() }, `?id=eq.${enc(u.id)}`);
+        const r = await MAIL.passwordReset(u.email, u.username, MAIL.link(req, `reset=${token}`), RESET_MIN);
+        await logAct(u.username, "Password reset requested", r.sent ? "Reset email sent" : `Reset email not sent (${r.reason})`, req.ip); }
+      res.json({ ok: true, message: RESET_SENT });   // the same answer whether or not the account exists
+    } catch (e) { console.error("[reset] request:", e.message); res.status(500).json({ error: "Could not send the reset email. Please try again." }); } });
+  const resetUser = async (token) => { if (!/^[a-f0-9]{64}$/.test(String(token || ""))) return null;
+    const u = await one(`?reset_token_hash=eq.${sha(token)}&select=id,username,email,role,plan,plan_status,reset_expires`);
+    if (!u || !u.reset_expires || new Date(u.reset_expires).getTime() < Date.now() || u.plan_status === "suspended") return null; return u; };
+  app.get("/api/auth/reset/:token", async (req, res) => {
+    try { const u = await resetUser(req.params.token); if (!u) return res.status(404).json({ error: "This reset link is not valid or has expired. Ask for a new one." }); res.json({ username: u.username }); }
+    catch (e) { res.status(500).json({ error: "Could not check the link. Please try again." }); } });
+  app.post("/api/auth/reset", async (req, res) => {
+    try { const u = await resetUser(req.body?.token); if (!u) return res.status(404).json({ error: "This reset link is not valid or has expired. Ask for a new one." });
+      const password = String(req.body?.password || ""); if (!strong(password)) return res.status(400).json({ error: PW_RULE });
+      const now = new Date().toISOString();
+      const upd = await sbFetch("PATCH", "ecoscope_users", { password_hash: await hashPw(password), reset_token_hash: null, reset_expires: null, last_login: now }, `?id=eq.${enc(u.id)}&reset_token_hash=eq.${sha(req.body.token)}`);
+      if (!Array.isArray(upd) || !upd[0]) return res.status(409).json({ error: "This reset link was already used." });
+      FAILS.delete(`u:${u.username.toLowerCase()}`); if (u.email) FAILS.delete(`u:${u.email.toLowerCase()}`); forgetUser(u.username);
+      await logAct(u.username, "Password reset", "New password set from the emailed link", req.ip);
+      res.json({ user: { username: u.username, email: u.email, role: u.role, plan: u.plan } });   // signs them in
+    } catch (e) { console.error("[reset] set:", e.message); res.status(500).json({ error: "Could not reset the password. Please try again." }); } });
 
   app.patch("/api/account", async (req, res) => {
     try { const me = req.auth.username; const u = await one(`?username=eq.${enc(me)}&select=${USER_COLS}`); if (!u) return deny(res, 404, "Account not found.", "not_found");
@@ -187,7 +234,9 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       if (String(req.body?.confirm || "").trim().toUpperCase() !== "DELETE") return deny(res, 400, "Type DELETE to confirm.", "bad_request");
       if (!(await checkPw(String(req.body?.password || ""), u.password_hash)).ok) return deny(res, 401, "Password is incorrect.", "bad_password");
       const own = await sbFetch("GET", "ecoscope_projects", null, `?owner=eq.${enc(me)}&select=id`); const ids = (Array.isArray(own) ? own : []).map(p => p.id);
-      for (const id of ids) { await sbFetch("DELETE", "ecoscope_project_members", null, `?project_id=eq.${enc(id)}`); await sbFetch("DELETE", "ecoscope_project_history", null, `?project_id=eq.${enc(id)}`); }
+      for (const id of ids) { await sbFetch("DELETE", "ecoscope_project_members", null, `?project_id=eq.${enc(id)}`); await sbFetch("DELETE", "ecoscope_project_history", null, `?project_id=eq.${enc(id)}`); try { await sbFetch("DELETE", "ecoscope_project_messages", null, `?project_id=eq.${enc(id)}`); } catch (e) { /* table may not exist yet */ } }
+      // saved chart pictures: the files in storage, then the rows
+      try { const sn = await sbFetch("GET", "ecoscope_snapshots", null, `?username=eq.${enc(me)}&select=storage_path`); const paths = (Array.isArray(sn) ? sn : []).map(x => x.storage_path).filter(Boolean); if (paths.length) await require("./blob_store")().del(paths); await sbFetch("DELETE", "ecoscope_snapshots", null, `?username=eq.${enc(me)}`); } catch (e) { console.error("[account] snapshots:", e.message); }
       if (ids.length) await sbFetch("DELETE", "ecoscope_projects", null, `?owner=eq.${enc(me)}`);
       await sbFetch("DELETE", "ecoscope_project_members", null, `?username=eq.${enc(me)}`);
       for (const t of ["ecoscope_support_messages", "ecoscope_support_threads", "ecoscope_requests", "ecoscope_activity"]) { try { await sbFetch("DELETE", t, null, `?username=eq.${enc(me)}`); } catch (e) { console.error("[account] delete", t, e.message); } }
@@ -305,28 +354,36 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
 
   // ── sharing: members of a project ──
   const findUser = async (who) => { const w = clean(who, 200); if (!w) return null; const q = w.includes("@") ? `email=eq.${enc(w.toLowerCase())}` : `username=eq.${enc(w)}`;
-    let r = await sbFetch("GET", "ecoscope_users", null, `?${q}&select=username,email`); if ((!Array.isArray(r) || !r[0]) && w.includes("@")) r = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${enc(w)}&select=username,email`);
+    const cols = "select=id,username,email,plan_status,created_at";
+    let r = await sbFetch("GET", "ecoscope_users", null, `?${q}&${cols}`); if ((!Array.isArray(r) || !r[0]) && w.includes("@")) r = await sbFetch("GET", "ecoscope_users", null, `?email=eq.${enc(w)}&${cols}`);
     if (Array.isArray(r) && r.length > 1) return { multi: r.map(x => x.username) };
     return Array.isArray(r) && r[0] ? r[0] : null; };
   app.get("/api/projects/:id/members", async (req, res) => {
     try { const a = await access(req, req.params.id); if (!a) return deny(res, 404, "Project not found.", "not_found");
       const m = await sbFetch("GET", "ecoscope_project_members", null, `?project_id=eq.${enc(a.p.id)}&select=username,role,invited_by,created_at&order=created_at.asc`) || [];
       let list = Array.isArray(m) ? m : [];
-      if (list.length && canManage(a)) { const us = await sbFetch("GET", "ecoscope_users", null, `?username=in.(${enc(list.map(x => `"${String(x.username).replace(/"/g, "")}"`).join(","))})&select=username,email`) || []; const em = {}; (Array.isArray(us) ? us : []).forEach(x => { em[x.username] = x.email; }); list = list.map(x => ({ ...x, email: em[x.username] || null })); }
+      if (list.length && canManage(a)) { const us = await sbFetch("GET", "ecoscope_users", null, `?username=in.(${enc(list.map(x => `"${String(x.username).replace(/"/g, "")}"`).join(","))})&select=username,email,plan_status`) || []; const em = {}, pend = {}; (Array.isArray(us) ? us : []).forEach(x => { em[x.username] = x.email; pend[x.username] = x.plan_status === "invited"; }); list = list.map(x => ({ ...x, email: em[x.username] || null, pending: !!pend[x.username] })); }
       res.json({ owner: a.p.owner, role: a.role, members: list }); } catch (e) { fail(res, e); } });
   app.post("/api/projects/:id/members", async (req, res) => {
     try { const a = await access(req, req.params.id); if (!a) return deny(res, 404, "Project not found.", "not_found");
       if (!canManage(a)) return deny(res, 403, "Only the owner can share this project.", "forbidden");
-      const role = ROLES.includes(req.body?.role) ? req.body.role : "viewer"; const u = await findUser(req.body?.who);
-      if (!u) return deny(res, 404, "No EcoScope account has that username or email. Ask them to sign up first, or check the spelling.", "no_user");
+      const role = ROLES.includes(req.body?.role) ? req.body.role : "viewer"; const who = clean(req.body?.who, 200); let u = await findUser(who); let created = false;
+      const isEmail = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,}$/.test(who);
+      // someone without an account: create an invitation and email it, so they join straight into this project
+      if (!u && isEmail) { u = await createInvited(who.toLowerCase(), "user", req.auth.username); created = true; }
+      if (!u) return deny(res, 404, "No EcoScope account has that username. To invite someone new, type their email address instead.", "no_user");
       if (u.multi) return deny(res, 409, `More than one account uses that email (${u.multi.join(", ")}). Invite by username instead, so the right account gets access.`, "ambiguous");
       if (u.username === a.p.owner) return deny(res, 400, "That person already owns this project.", "bad_request");
       const now = new Date().toISOString();
       const ex = await sbFetch("GET", "ecoscope_project_members", null, `?project_id=eq.${enc(a.p.id)}&username=eq.${enc(u.username)}&select=username`);
       if (Array.isArray(ex) && ex[0]) await sbFetch("PATCH", "ecoscope_project_members", { role }, `?project_id=eq.${enc(a.p.id)}&username=eq.${enc(u.username)}`);
       else await sbFetch("POST", "ecoscope_project_members", { project_id: a.p.id, username: u.username, role, invited_by: req.auth.username, created_at: now });
-      await history(a.p, req, `Shared with ${u.username}`, role === "editor" ? "Can edit" : "Can view", null, now);
-      res.json({ ok: true, username: u.username, email: u.email || null, role });
+      const pending = created || u.plan_status === "invited";
+      await history(a.p, req, `Shared with ${pending ? u.email : u.username}`, role === "editor" ? "Can edit" : "Can view", null, now);
+      let mailed = { sent: false, reason: "no_email" };
+      if (pending) { const token = created ? u.invite_token : await renewInvite(u); mailed = await MAIL.projectInvite(u.email, req.auth.username, a.p.name || "a project", role, MAIL.link(req, `invite=${token}`), INVITE_DAYS);
+        res.json({ ok: true, invited: true, username: u.username, email: u.email, role, emailed: mailed.sent, invite_link: mailed.sent ? undefined : MAIL.link(req, `invite=${token}`) }); }
+      else { if (u.email) mailed = await MAIL.projectShared(u.email, u.username, req.auth.username, a.p.name || "a project", role, MAIL.link(req, "")); res.json({ ok: true, username: u.username, email: u.email || null, role, emailed: mailed.sent }); }
     } catch (e) { fail(res, e); } });
   app.patch("/api/projects/:id/members/:user", async (req, res) => {
     try { const a = await access(req, req.params.id); if (!canManage(a)) return deny(res, 403, "Only the owner can change access.", "forbidden");
@@ -341,5 +398,56 @@ module.exports = function registerAuthProjects(app, { sbFetch }) {
       await history(a.p, req, self ? `${req.params.user} left the project` : `Removed ${req.params.user}`, null, null, new Date().toISOString()); res.json({ ok: true });
     } catch (e) { fail(res, e); } });
 
-  return { sign, verify, issue };
+  // ════════════════ LIVE: project chat, who is online, who is typing; support presence ════════════════
+  // Messages are stored in ecoscope_project_messages; presence and typing are kept in memory (one server) and expire on their own.
+  const SEEN = new Map(); // `${room}|${username}` -> { at, typing }
+  const touch = (room, username, typing) => { const k = `${room}|${username}`; const cur = SEEN.get(k) || {}; SEEN.set(k, { at: Date.now(), typing: typing ? Date.now() : (cur.typing || 0) }); if (SEEN.size > 50000) { const cut = Date.now() - 300e3; for (const [kk, v] of SEEN) if (v.at < cut) SEEN.delete(kk); } };
+  const presence = (room, me) => { const now = Date.now(); const online = [], typing = []; for (const [k, v] of SEEN) { if (!k.startsWith(room + "|")) continue; const u = k.slice(room.length + 1); if (u === me) continue; if (now - v.at < 60e3) online.push(u); if (now - v.typing < 6e3) typing.push(u); } return { online: online.sort(), typing: typing.sort() }; };
+  const MSG_COLS = "id,project_id,username,body,created_at,edited_at,deleted";
+  const chatGate = async (req, res) => { const a = await access(req, req.params.id); if (!a) { deny(res, 404, "Project not found.", "not_found"); return null; } return a; };
+  app.get("/api/projects/:id/chat", async (req, res) => {
+    try { const a = await chatGate(req, res); if (!a) return; const me = req.auth.username; touch(`p:${a.p.id}`, me, false);
+      const after = parseInt(req.query.after || "0", 10) || 0; const q = after ? `&id=gt.${after}&order=id.asc&limit=200` : `&order=id.desc&limit=150`;
+      let msgs = await sbFetch("GET", "ecoscope_project_messages", null, `?project_id=eq.${enc(a.p.id)}&select=${MSG_COLS}${q}`); if (!Array.isArray(msgs)) throw new Error(JSON.stringify(msgs).slice(0, 200));
+      if (!after) msgs = msgs.reverse(); msgs = msgs.map(m => (m.deleted ? { ...m, body: "" } : m));
+      // the people in this project, so the chat can list members and handle @mentions
+      let people = [a.p.owner]; try { const mm = await sbFetch("GET", "ecoscope_project_members", null, `?project_id=eq.${enc(a.p.id)}&select=username`); if (Array.isArray(mm)) people = [...new Set([a.p.owner, ...mm.map(x => x.username)])]; } catch (e) { /* owner only */ }
+      res.setHeader("Cache-Control", "no-store"); res.json({ messages: msgs, ...presence(`p:${a.p.id}`, me), people, role: a.role });
+    } catch (e) { fail(res, e); } });
+  const CHAT_RATE = new Map();
+  app.post("/api/projects/:id/chat", async (req, res) => {
+    try { const a = await chatGate(req, res); if (!a) return; const me = req.auth.username; const body = clean(req.body?.body, 4000); if (!body) return deny(res, 400, "The message is empty.", "bad_request");
+      const now = Date.now(); const r = CHAT_RATE.get(me) || { t: now, n: 0 }; if (now - r.t > 60e3) { r.t = now; r.n = 0; } if (++r.n > 40) return deny(res, 429, "Too many messages in a minute. Please slow down.", "rate_limited"); CHAT_RATE.set(me, r);
+      const out = await sbFetch("POST", "ecoscope_project_messages", { project_id: a.p.id, username: me, body, created_at: new Date().toISOString() });
+      if (!Array.isArray(out) || !out[0]) throw new Error(JSON.stringify(out).slice(0, 200)); const k = `p:${a.p.id}|${me}`; const cur = SEEN.get(k); if (cur) cur.typing = 0; touch(`p:${a.p.id}`, me, false);
+      res.json(out[0]); } catch (e) { fail(res, e); } });
+  app.post("/api/projects/:id/chat/typing", async (req, res) => {
+    try { const a = await chatGate(req, res); if (!a) return; touch(`p:${a.p.id}`, req.auth.username, true); res.json({ ok: true }); } catch (e) { fail(res, e); } });
+  app.patch("/api/projects/:id/chat/:mid", async (req, res) => {
+    try { const a = await chatGate(req, res); if (!a) return; const body = clean(req.body?.body, 4000); if (!body) return deny(res, 400, "The message is empty.", "bad_request");
+      const out = await sbFetch("PATCH", "ecoscope_project_messages", { body, edited_at: new Date().toISOString() }, `?id=eq.${enc(req.params.mid)}&project_id=eq.${enc(a.p.id)}&username=eq.${enc(req.auth.username)}&deleted=eq.false`);
+      if (!Array.isArray(out) || !out[0]) return deny(res, 404, "You can only edit your own messages.", "not_found"); res.json(out[0]); } catch (e) { fail(res, e); } });
+  app.delete("/api/projects/:id/chat/:mid", async (req, res) => {
+    try { const a = await chatGate(req, res); if (!a) return; const who = canManage(a) ? "" : `&username=eq.${enc(req.auth.username)}`;
+      const out = await sbFetch("PATCH", "ecoscope_project_messages", { deleted: true, body: "", edited_at: new Date().toISOString() }, `?id=eq.${enc(req.params.mid)}&project_id=eq.${enc(a.p.id)}${who}`);
+      if (!Array.isArray(out) || !out[0]) return deny(res, 404, "You can only delete your own messages.", "not_found"); res.json({ ok: true }); } catch (e) { fail(res, e); } });
+  // unread counts for the project list: newest message id per project the user can open
+  app.get("/api/projects-chat/latest", async (req, res) => {
+    try { const ids = String(req.query.ids || "").split(",").map(x => x.trim()).filter(x => /^[A-Za-z0-9_-]{1,64}$/.test(x)).slice(0, 100); if (!ids.length) return res.json({});
+      const out = {}; for (const id of ids) { const a = await access(req, id); if (!a) continue; const r = await sbFetch("GET", "ecoscope_project_messages", null, `?project_id=eq.${enc(id)}&deleted=eq.false&select=id,username&order=id.desc&limit=1`); if (Array.isArray(r) && r[0]) out[id] = r[0]; }
+      res.json(out); } catch (e) { fail(res, e); } });
+
+  // support: is the team online, is someone typing (admins are "online" while their inbox is open)
+  app.post("/api/support/typing", (req, res) => { if (!req.auth) return deny(res, 401, "Please sign in again.", "auth_required");
+    const u = req.auth.admin ? clean(req.body?.username, 64) : req.auth.username; if (!u) return deny(res, 400, "username required", "bad_request");
+    touch(`s:${u}`, req.auth.admin ? "@team" : u, true); if (req.auth.admin) touch("s:@team", req.auth.username, false); res.json({ ok: true }); });
+  app.get("/api/support/presence", (req, res) => { if (!req.auth) return deny(res, 401, "Please sign in again.", "auth_required");
+    const u = req.auth.admin ? clean(req.query.username, 64) : req.auth.username; const now = Date.now();
+    if (req.auth.admin) { touch("s:@team", req.auth.username, false); const v = SEEN.get(`s:${u}|${u}`); return res.json({ user_online: !!v && now - v.at < 60e3, user_typing: !!v && now - v.typing < 6e3 }); }
+    touch(`s:${u}`, u, false); const team = presence("s:@team", null); const t = SEEN.get(`s:${u}|@team`);
+    res.json({ team_online: team.online.length > 0, team_typing: !!t && now - t.typing < 6e3 }); });
+  // an admin reading the inbox counts as online
+  app.use("/api/support", (req, res, next) => { if (req.auth && req.auth.admin && req.method === "GET") touch("s:@team", req.auth.username, false); next(); });
+
+  return { sign, verify, issue, createInvited, renewInvite, mail: MAIL };
 };

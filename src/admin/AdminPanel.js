@@ -35,7 +35,7 @@ function InviteModal({onClose,onDone}){
   const [err,setErr]=useState('');
   const [sent,setSent]=useState(false);
   const [loading,setLoading]=useState(false);
-  const [inviteLink,setInviteLink]=useState('');
+  const [inviteLink,setInviteLink]=useState(''); const [emailed,setEmailed]=useState(false);
   const send=async e=>{
     e.preventDefault();setErr('');
     if(!email.trim()||!email.includes('@')){setErr('Valid email required');return;}
@@ -43,8 +43,8 @@ function InviteModal({onClose,onDone}){
     const res=await US.invite(email.trim(),role);
     setLoading(false);
     if(res.error){setErr(res.error);return;}
-    setInviteLink(`${window.location.origin}/?invite=${res.inviteToken}`);
-    setSent(true);setTimeout(()=>{onDone();onClose();},1800);
+    setInviteLink(`${window.location.origin}/?invite=${res.inviteToken}`); setEmailed(res.emailed);
+    setSent(true); onDone();
   };
   return(
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:9999,backdropFilter:'blur(6px)'}}>
@@ -57,7 +57,7 @@ function InviteModal({onClose,onDone}){
           <div style={{padding:'10px 0'}}>
             <div style={{textAlign:'center',marginBottom:16}}>
               <div style={{fontSize:36,marginBottom:8}}><Ico n="link"/></div>
-              <div style={{color:C.teal,fontSize:14,fontWeight:600}}>User created!</div>
+              <div style={{color:C.teal,fontSize:14,fontWeight:600}}>{emailed?'Invitation emailed':'Invitation created'}</div>
               <div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginTop:4}}>{email} added as {role}</div>
             </div>
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,padding:'12px 14px',marginBottom:14}}>
@@ -65,7 +65,7 @@ function InviteModal({onClose,onDone}){
               <div style={{color:C.text,fontSize:11,fontFamily:C.mono,wordBreak:'break-all',marginBottom:10}}>{inviteLink}</div>
               <button onClick={()=>{ try { (navigator.clipboard? navigator.clipboard.writeText(inviteLink) : Promise.reject()).catch(()=>window.prompt("Copy this invite link:", inviteLink)); } catch(e){ window.prompt("Copy this invite link:", inviteLink); } }} style={{background:C.gold,color:'#000',border:'none',borderRadius:6,padding:'7px 16px',fontSize:11,fontWeight:700,cursor:'pointer'}}><Ico n="clipboard"/> Copy Link</button>
             </div>
-            <div style={{color:C.dim,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>Share this link with {email}. They open it, choose a username and password, and are signed in. The link works once and expires in 14 days.</div>
+            <div style={{color:C.dim,fontSize:11,fontFamily:C.mono,lineHeight:1.6}}>{emailed?`An email with this link was sent to ${email}. You can also share the link yourself.`:`The email could not be sent (check RESEND_API_KEY in Railway). Share this link with ${email} yourself.`} They open it, choose a username and password, and are signed in. The link works once and expires in 14 days.</div>
             <button onClick={onClose} style={{...btn(),width:'100%',marginTop:14,padding:'10px',fontSize:12}}>Done</button>
           </div>
         ):(

@@ -1,4 +1,6 @@
 // dashboard/Dashboard.js — split from App.js (code unchanged; only imports and exports were added)
+import { ProjectChat, getSeen } from "../ui/chatkit";
+import { SnapshotGallery } from "../ui/snapshots";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import { AGG_METHODS, IMPUTE_METHODS, NORM_METHODS, TRANSFORMS, applyTransform, buildComposite, dagBackdoorSet, dagHasCycle, downloadDAG, exportChart, generateEcoScopeAnalysis, histogram, imputeData, normalCurve, olsRegression, skewNormalCurve, summaryStats } from "../analysis/stats";
@@ -874,6 +876,7 @@ function Dashboard({user, onLogout}) {
     all.forEach(t=>{ if (!t || t.loading || t.missing || !Array.isArray(t.rows) || prjCells(t)<=PRJ_BIG_CELLS) return; const sig=`${t.rows.length}|${t.headers.length}|${t.updated||""}|${t.name||""}`; if (bigSig.current[t.id]===sig) return; bigSig.current[t.id]=sig;
       prjIdb.put(prjBigKey(user.username, t.id), { name:t.name, headers:t.headers, rows:t.rows }).catch(()=>{ bigSig.current[t.id]=null; setSaveState("A large table could not be stored on this device"); }); }); },[datasets, importedRaw, user.username]);
   const hydrate=(id, onRows, onMissing)=>{ prjIdb.get(prjBigKey(user.username, id)).then(v=>{ if (v && v.rows){ bigSig.current[id]=null; onRows(v); } else onMissing(); }).catch(onMissing); };
+  const [showSnaps,setShowSnaps]=useState(false); const [snapMsg,setSnapMsg]=useState("");
   const snapshot=useMemo(()=>({ v:1, dataLevel, sourceId, varBasket, country, regionFilter, startYear, endYear, chartType, axisMode, viewMode, cmpOn, cmpCountry,
     transform, appliedTransform, imputeMethod, appliedImpute, freq, showComposite, compWeights, compNorm, compAgg, compBasis, analysisTab,
     dagEdges, dagTreatment, dagOutcome, dagPositions, dagMode, dagOpt, unobservedNodes:prjToJSON(unobservedNodes), hiddenChartVars:prjToJSON(hiddenChartVars),
@@ -982,6 +985,20 @@ function Dashboard({user, onLogout}) {
       if (missing.length) alert(`Restored. These large datasets were not stored in the history and could not be brought back: ${missing.join(", ")}.`); },
   };
   const activeProject=projects.find(p=>p.id===activeId);
+  // ── help assistant: what the user is looking at, and screens it can open ──
+  useEffect(()=>{ try { window.__ecoHelpContext={ screen: showWorkbench? `Data Workbench (${showWorkbench})` : showImpact? "Policy Impact Lab" : showDash? "Dashboards" : showVault? "Data Vault" : showSettings? "Settings" : "Main chart",
+      sources:[...new Set(varBasket.map(b=>b.sourceName))], variables:varBasket.map(b=>b.name||b.code), country:cc&&cc.name, years:`${startYear}-${endYear}`, chart:chartType, view:viewMode, sidebar_tab:analysisTab,
+      transform:transform!=="none"? transform : "", plan:(user.plan||"free"), role:user.role, project:activeProject? `${activeProject.name} (${activeProject.role})` : "" }; } catch(e){} });
+  useEffect(()=>{ const WB={ open_workbench:"datasets", open_formulas:"formulas", open_merge:"combine", open_optimize:"optimize", open_pdf_tables:"pdf", open_coding:"coding", open_regression:"formulas" };
+    const h=(e)=>{ const a=e.detail; if (WB[a]) setShowWorkbench(WB[a]); else if (a==="open_impact") setShowImpact(true); else if (a==="open_dashboards") setShowDash(true); else if (a==="open_vault") setShowVault(true);
+      else if (a==="open_projects") setShowProjects("projects"); else if (a==="open_snapshots") setShowSnaps(true); else if (a==="open_settings") openSettings(); else if (a==="open_import") setShowImport(true);
+      else if (a==="open_dag") setAnalysisTab("dag"); else if (a==="open_composite") setAnalysisTab("composite"); };
+    window.addEventListener("ecoscope-help-action",h); return ()=>window.removeEventListener("ecoscope-help-action",h); });
+  // ── project chat: open window, and a dot when someone else wrote since you last looked ──
+  const [showChat,setShowChat]=useState(false); const [chatUnread,setChatUnread]=useState(false);
+  useEffect(()=>{ setShowChat(false); setChatUnread(false); if (!activeId) return; let alive=true;
+    const check=async()=>{ if (document.hidden) return; try { const r=await US.projectChatLatest([activeId]); const m=r&&r[activeId]; if (alive) setChatUnread(!!m && m.username!==user.username && m.id>getSeen(activeId)); } catch(e){} };
+    check(); const t=setInterval(check, 20000); return ()=>{ alive=false; clearInterval(t); }; },[activeId, user.username]);
   // the data behind the current chart as a table (year + one column per basket variable)
   const basketTable=()=>{ const cols=varBasket.map(item=>({ name:varBasket.some(o=>o!==item && (o.label||o.varCode)===(item.label||item.varCode))? `${item.label||item.varCode} (${item.sourceName})` : (item.label||item.varCode), data:applyTransform(imputeData(multiData[`${item.sourceId}:${item.varCode}`]||[], appliedImpute), appliedTransform) }));
     const years=[...new Set(cols.flatMap(c=>c.data.map(d=>d.year)))].sort((a,b)=>String(a).localeCompare(String(b),undefined,{ numeric:true }));
@@ -1019,6 +1036,10 @@ function Dashboard({user, onLogout}) {
             {!isMobile&&activeProject&&(activeProject.role!=="owner"||activeProject.members>0)&&<span style={{fontSize:10,color:C.mid,border:`1px solid ${C.border}`,borderRadius:3,padding:"0 4px",whiteSpace:"nowrap"}}>{activeProject.role==="viewer"? "view only" : activeProject.role==="editor"? "shared · edit" : `shared · ${activeProject.members}`}</span>}
             <span aria-hidden="true" style={{width:7,height:7,borderRadius:4,flex:"none",background:/^View only/.test(saveState)?C.mid:/saved$/i.test(saveState)?C.teal:/Saving|Unsaved|Opening|Loading/.test(saveState)?C.orange:C.red}}/>
           </button>
+          {activeProject&&<button type="button" onClick={()=>{ setShowChat(v=>!v); setChatUnread(false); }} title={`Chat with everyone in "${activeProject.name}"`} aria-label={`Project chat${chatUnread?", new messages":""}`} aria-pressed={showChat}
+            style={{display:"flex",alignItems:"center",gap:5,background:showChat?`${C.teal}18`:"none",border:`1px solid ${showChat?C.teal:C.border}`,borderRadius:6,color:C.text,cursor:"pointer",padding:isMobile?"7px 9px":"6px 10px",fontSize:12,position:"relative"}}>
+            <Ico n="message"/>{!isMobile&&"Chat"}{chatUnread&&<span aria-hidden="true" style={{position:"absolute",top:-3,right:-3,width:9,height:9,borderRadius:5,background:C.red,border:`2px solid ${C.surface}`}}/>}</button>}
+          {showChat&&activeProject&&<ProjectChat project={activeProject} me={user.username} onClose={()=>setShowChat(false)} onSeen={()=>setChatUnread(false)}/>}
           {/* Global reload button */}
           <button onClick={forceRefresh} disabled={loading} title="Reload data" style={{background:"none",border:`1px solid ${loading?C.teal:C.border}`,borderRadius:6,color:loading?C.teal:C.mid,cursor:loading?"wait":"pointer",padding:isMobile?"7px 9px":"7px 11px",fontSize:isMobile?13:12,display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
             <span style={{display:"inline-block",animation:loading?"spin 0.8s linear infinite":"none"}}>↻</span>
@@ -1633,11 +1654,13 @@ function Dashboard({user, onLogout}) {
                     <button onClick={()=>document.getElementById("chartExportMenu").style.display==="none"?document.getElementById("chartExportMenu").style.display="block":document.getElementById("chartExportMenu").style.display="none"} style={{...pill(false),color:C.blue,borderColor:`${C.blue}44`,fontSize:11}}><Ico n="camera"/> Snapshot</button>
                     <div id="chartExportMenu" style={{display:"none",position:"absolute",right:0,top:"calc(100% + 6px)",background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:6,padding:6,minWidth:180,zIndex:99,boxShadow:C.shadow}}>
                       <div style={{color:C.dim,fontSize:10,fontFamily:C.mono,padding:"4px 10px 6px",textTransform:"uppercase",letterSpacing:"0.1em"}}>Export Chart</div>
-                      {[[<><Ico n="image"/> PNG (High-Res)</>,"png"],["◈ SVG (Vector)","svg"]].map(([label,fmt])=>(
+                      {[[<><Ico n="image"/> PNG (high resolution)</>,"png"],["▣ JPEG","jpeg"],["▣ WebP","webp"],["◈ SVG (vector)","svg"],["▤ PDF","pdf"],["⧉ Copy to clipboard","copy"],["★ Save to My snapshots","snapshot"],["▦ Open My snapshots","gallery"]].map(([label,fmt])=>(
                         <button key={fmt} onClick={()=>{
-                          const title=`${currentVar.name} — ${cc.name} (${source.short}) ${startYear}–${endYear}${transform!=="none"?` · ${TRANSFORMS.find(t=>t.id===transform)?.label}`:""}`;
-                          exportChart(fmt,title);
                           document.getElementById("chartExportMenu").style.display="none";
+                          if(fmt==="gallery"){ setShowSnaps(true); return; }
+                          const title=`${currentVar.name} — ${cc.name} (${source.short}) ${startYear}–${endYear}${transform!=="none"?` · ${TRANSFORMS.find(t=>t.id===transform)?.label}`:""}`;
+                          setSnapMsg(fmt==="snapshot"?"Saving…":"");
+                          exportChart(fmt,title,{ source:source.short, country:cc.name, variable:currentVar.name, startYear, endYear }).then(m=>{ setSnapMsg(m||""); if(m) setTimeout(()=>setSnapMsg(""),4000); }).catch(e=>setSnapMsg("✗ "+e.message));
                         }} style={{display:"flex",alignItems:"center",gap:8,width:"100%",padding:"9px 12px",borderRadius:6,border:"none",background:"transparent",cursor:"pointer",color:C.text,fontSize:11,fontFamily:C.mono}}>
                           {label}
                         </button>
@@ -1646,6 +1669,8 @@ function Dashboard({user, onLogout}) {
                         <div style={{color:C.dim,fontSize:10,fontFamily:C.mono}}>Includes title, legend & attribution</div>
                       </div>
                     </div>
+                    {snapMsg&&<div role="status" style={{position:"absolute",right:0,top:"calc(100% + 6px)",whiteSpace:"nowrap",background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:"6px 10px",fontSize:11,color:snapMsg.startsWith("✗")?C.red:C.teal,zIndex:98}}>{snapMsg}</div>}
+                    {showSnaps&&<SnapshotGallery onClose={()=>setShowSnaps(false)}/>}
                   </div>
                 </div>
               </div>

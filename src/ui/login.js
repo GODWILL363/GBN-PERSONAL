@@ -1,4 +1,5 @@
 // ui/login.js — split from App.js (code unchanged; only imports and exports were added)
+import { labExport } from "../workbench/export";
 import { useEffect, useState } from "react";
 import { dlCSV, dlPDF, fmtVal, useIsMobile } from "../core/fetch";
 import { US } from "../core/store";
@@ -118,6 +119,38 @@ function AcceptInvite({ token, onLogin, onCancel }){
       </form>
     </div>);
 }
+// ── Reset a forgotten password: emailed link /?reset=<token> → new password → signed in ──
+function ResetPassword({ token, onLogin, onCancel }){
+  const [name,setName]=useState(null); const [err,setErr]=useState(""); const [p,setP]=useState(""); const [p2,setP2]=useState(""); const [busy,setBusy]=useState(false);
+  useEffect(()=>{ fetch(`/api/auth/reset/${encodeURIComponent(token)}`).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(({ok,j})=>{ if(ok) setName(j.username); else setErr(j.error||"This reset link is not valid."); }).catch(()=>setErr("Could not check the link. Please try again.")); },[token]);
+  const pwErrs=p?checkPw(p):[];
+  const go=async e=>{ e.preventDefault(); setErr(""); if(pwErrs.length||!p){ setErr(pwErrs[0]||"Choose a new password"); return; } if(p!==p2){ setErr("Passwords do not match"); return; }
+    setBusy(true);
+    try{ const r=await fetch("/api/auth/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token,password:p})}); const j=await r.json();
+      if(!r.ok){ setErr(j.error||"Could not reset the password."); setBusy(false); return; }
+      const nu=j.user; const initials=nu.username.slice(0,2).toUpperCase(); const avatarColor=["#6ea8fe","#3ecf8e","#f0a950","#b39ddb","#56c7d4"][Math.abs(nu.username.charCodeAt(0)||0)%5];
+      onLogin({...nu,token:j.token,initials,avatarColor});
+    }catch(_){ setErr("Could not reach EcoScope. Please try again."); setBusy(false); } };
+  const inp={width:"100%",boxSizing:"border-box",background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,padding:"10px 12px",fontSize:14,fontFamily:C.font,marginBottom:12};
+  const lab={color:C.mid,fontSize:11,fontFamily:C.mono,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:6,display:"block"};
+  return(
+    <div style={{background:C.bg,minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16,fontFamily:C.font}}>
+      <form onSubmit={go} style={{background:C.surface,border:`1px solid ${C.borderHi}`,borderRadius:10,padding:"32px 36px",width:"100%",maxWidth:420}}>
+        <h1 style={{color:C.text,fontSize:20,margin:"0 0 6px"}}>Choose a new password</h1>
+        {!name&&!err&&<p style={{color:C.mid,fontSize:13}}>Checking your link…</p>}
+        {name&&<>
+          <p style={{color:C.mid,fontSize:13,margin:"0 0 18px"}}>For the account <b style={{color:C.text}}>{name}</b>.</p>
+          <label style={lab} htmlFor="rs-p">New password</label><input id="rs-p" type="password" autoComplete="new-password" value={p} onChange={e=>setP(e.target.value)} style={inp}/>
+          {p&&pwErrs.length>0&&<div style={{color:C.dim,fontSize:11,marginTop:-6,marginBottom:10}}>{pwErrs.join(" · ")}</div>}
+          <label style={lab} htmlFor="rs-p2">Confirm password</label><input id="rs-p2" type="password" autoComplete="new-password" value={p2} onChange={e=>setP2(e.target.value)} style={inp}/>
+          <button type="submit" disabled={busy} style={{...btn(),width:"100%",padding:"11px",marginTop:4}}>{busy?"Saving…":"Save and sign in →"}</button>
+        </>}
+        {err&&<div role="alert" style={{color:C.red,fontSize:13,marginTop:12}}>{err}</div>}
+        <button type="button" onClick={onCancel} style={{background:"none",border:"none",color:C.teal,fontSize:12,marginTop:16,cursor:"pointer",padding:0}}>Go to sign in</button>
+      </form>
+    </div>);
+}
+
 function Login({onLogin, notice=""}){
   const [mode,setMode]=useState("login");
   const [u,setU]=useState(""); const [email,setEmail]=useState("");
@@ -136,9 +169,12 @@ function Login({onLogin, notice=""}){
   const go=async e=>{
     e.preventDefault(); setErr("");
     if(mode==="forgot"){
-      if(!email.trim()){setErr("Email required");return;}
-      setLoading(true);await new Promise(r=>setTimeout(r,800));setLoading(false);
-      setOk("Reset link sent (demo). Check your inbox.");return;
+      if(!email.trim()){setErr("Enter your email or username");return;}
+      setLoading(true);
+      try{ const r=await fetch("/api/auth/forgot",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email.trim()})}); const j=await r.json().catch(()=>({}));
+        if(!r.ok) setErr(j.error||"Could not send the reset email. Please try again."); else setOk(j.message||"If an account uses that email, a reset link is on its way."); }
+      catch(_){ setErr("Could not reach EcoScope. Please try again."); }
+      setLoading(false);return;
     }
     if(mode==="register"){
       const ue=checkUn(u); if(ue.length){setErr(ue[0]);return;}
@@ -204,8 +240,8 @@ function Login({onLogin, notice=""}){
 
         <form onSubmit={go}>
           {mode==="forgot"?(
-            <><div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginBottom:16,lineHeight:1.6}}>Enter your email to receive a reset link.</div>
-            <div style={{marginBottom:16}}><div style={{color:C.mid,fontSize:10,fontFamily:C.mono,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:7}}>Email Address</div><input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" style={{...inp,border:`1px solid ${email?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div></>
+            <><div style={{color:C.mid,fontSize:11,fontFamily:C.mono,marginBottom:16,lineHeight:1.6}}>Enter the email (or username) of your account. We will email you a link to choose a new password.</div>
+            <div style={{marginBottom:16}}><div style={{color:C.mid,fontSize:10,fontFamily:C.mono,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:7}}>Email Address</div><input type="text" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com or username" style={{...inp,border:`1px solid ${email?C.gold:C.border}`,fontSize:13,padding:"12px 14px"}}/></div></>
           ):(
             <>
               <div style={{marginBottom:12}}>
@@ -311,6 +347,11 @@ function ExportMenu({data,currentVar,cc,source,startYear,endYear,plan,onUpgradeN
       a.href=URL.createObjectURL(new Blob([xml],{type:"application/vnd.ms-excel;charset=utf-8"}));
       a.download=filename+".xls"; a.click();
       US.log(cc.name,"Excel Export",`${currentVar.name} · ${startYear}–${endYear}`);
+    } else if(type==="docx"||type==="pptx"){
+      if(!canXls){onUpgradeNeeded(type==="docx"?"Word Export":"PowerPoint Export");return;}
+      const rows=useMulti? multi.rows.map(r=>Object.fromEntries(multi.headers.map((h,i)=>[h,r[i]]))) : data.map((d,i)=>{ const prev=data[i-1]; const delta=prev&&prev.value?((d.value-prev.value)/Math.abs(prev.value)*100):null; return { Year:d.year, [currentVar.name]:fmtVal(d.value,fmt), "Change on previous":delta==null?"—":`${delta>=0?"+":""}${delta.toFixed(2)}%` }; });
+      labExport(type,`${currentVar.name}, ${cc.name} (${source.short||source.name}) ${startYear}–${endYear}`,[{rows,name:filename}]).catch(e=>window.alert("Export failed: "+e.message));
+      US.log(cc.name,type==="docx"?"Word Export":"PowerPoint Export",`${currentVar.name} · ${startYear}–${endYear}`);
     } else if(type==="pdf"){
       if(!canPdf){onUpgradeNeeded("PDF Export");return;}
       dlPDF(data,currentVar.name,cc.name,source.name,startYear,endYear,fmt);
@@ -332,6 +373,8 @@ function ExportMenu({data,currentVar,cc,source,startYear,endYear,plan,onUpgradeN
               {type:"csv",icon:<Ico n="file"/>,label:"CSV",sub:"Comma separated values",free:true},
               {type:"excel",icon:<Ico n="chart"/>,label:"Excel (.xls)",sub:"Spreadsheet with formatting",free:canXls},
               {type:"pdf",icon:<Ico n="clipboard"/>,label:"PDF Report",sub:"Printable formatted report",free:canPdf},
+              {type:"docx",icon:<Ico n="file"/>,label:"Word (.docx)",sub:"Table ready for a report",free:canXls},
+              {type:"pptx",icon:<Ico n="chart"/>,label:"PowerPoint (.pptx)",sub:"Table on slides",free:canXls},
             ].map(({type,icon,label,sub,free})=>(
               <button key={type} onClick={()=>doExport(type)} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",borderRadius:6,border:"none",background:"transparent",cursor:"pointer",textAlign:"left",transition:"background .1s"}}>
                 <span style={{fontSize:18,flexShrink:0}}>{icon}</span>
@@ -474,4 +517,4 @@ function AccountManager({ user, onAccount, onDeleted, settings, onSaveSettings, 
   </>;
 }
 
-export { AcceptInvite, AccountManager, ChangePassword, ExportMenu, Login, PasswordInput, StBanner, StField, StSec, UpgradeModal, btn, card, csvToSeries, detectTimeColumn, ecoPanelInfo, ecoTimeCmp, inp, parseCSV, pill, sel };
+export { AcceptInvite, ResetPassword, AccountManager, ChangePassword, ExportMenu, Login, PasswordInput, StBanner, StField, StSec, UpgradeModal, btn, card, csvToSeries, detectTimeColumn, ecoPanelInfo, ecoTimeCmp, inp, parseCSV, pill, sel };

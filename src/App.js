@@ -3,7 +3,7 @@ import { AdminPanel } from "./admin/AdminPanel";
 import { US } from "./core/store";
 import { C } from "./core/theme";
 import { Dashboard } from "./dashboard/Dashboard";
-import { AcceptInvite, Login } from "./ui/login";
+import { AcceptInvite, Login, ResetPassword } from "./ui/login";
 
 // ══════════════════════════════════════════════
 // ROOT
@@ -31,6 +31,8 @@ export default function App() {
   const [booting,setBooting]=useState(true);
   const [expired,setExpired]=useState(false);
   const [invite,setInvite]=useState(()=>{ try { const v=new URLSearchParams(window.location.search).get("invite"); return v&&/^[a-f0-9]{40}$/.test(v)?v:null; } catch(e){ return null; } });
+  const [reset,setReset]=useState(()=>{ try { const v=new URLSearchParams(window.location.search).get("reset"); return v&&/^[a-f0-9]{64}$/.test(v)?v:null; } catch(e){ return null; } });
+  const clearReset=()=>{ try { const url=new URL(window.location.href); url.searchParams.delete("reset"); window.history.replaceState(null,"",url.pathname+url.search+url.hash); } catch(e){} setReset(null); };
   const clearInvite=()=>{ try { const url=new URL(window.location.href); url.searchParams.delete("invite"); window.history.replaceState(null,"",url.pathname+url.search+url.hash); } catch(e){} setInvite(null); };
   useEffect(()=>{ const f=()=>{ localStorage.removeItem(US.SESS); setUser(null); setExpired(true); }; window.addEventListener('ecoscope-auth-expired',f); return ()=>window.removeEventListener('ecoscope-auth-expired',f); },[]);
 
@@ -54,6 +56,7 @@ export default function App() {
       <div style={{color:C.gold,fontFamily:"monospace",fontSize:14}}>◈ Loading EcoScope…</div>
     </div>
   );
+  if(!user && reset) return <ResetPassword token={reset} onCancel={clearReset} onLogin={u=>{const nu={...u,role:u.role||"user"};localStorage.setItem(US.SESS,JSON.stringify({username:nu.username,role:nu.role,plan:nu.plan,token:nu.token,at:new Date().toISOString()}));clearReset();setUser(nu);}}/>;
   if(!user && invite) return <AcceptInvite token={invite} onCancel={clearInvite} onLogin={u=>{const nu={...u,role:u.role||"user"};localStorage.setItem(US.SESS,JSON.stringify({username:nu.username,role:nu.role,plan:nu.plan,token:nu.token,at:new Date().toISOString()}));clearInvite();setUser(nu);}}/>;
   if(!user) return <Login notice={expired? "Your session has ended. Please sign in again." : ""} onLogin={u=>{const nu={...u,role:u.role||(u.username==="admin"?"admin":"user")};localStorage.setItem(US.SESS,JSON.stringify(nu));setExpired(false);setUser(nu);}}/>;
   if(user.role==="admin"||user.username==="admin") return <AdminPanel user={user} onLogout={()=>{US.logout(user.username);setUser(null);}}/>;

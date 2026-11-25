@@ -1,4 +1,6 @@
 // impact/tabs.js — split from App.js (code unchanged; only imports and exports were added)
+import { HELP_ACTIONS, MiniMd, runHelpAction } from "../ui/chatkit";
+import { labExport } from "../workbench/export";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { TRANSFORMS } from "../analysis/stats";
@@ -11,6 +13,15 @@ import { CustomTip, ciBootstrapIPW, ciFillSeries, ciMean, ciPanelFromTable, ciPr
 import { WbMax } from "../workbench/workbench";
 
 // ── Matching tab ──
+// Export a tool's result tables as CSV, Excel, Word, PowerPoint or PDF
+function LabExport({ onExport }) {
+  const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
+  const go=async(fmt)=>{ setBusy(true); setMsg(""); try { const m=await onExport(fmt); if (m) { setMsg(m); setTimeout(()=>setMsg(x=>x===m? "" : x),5000); } } catch(e){ setMsg("Export failed: "+e.message); } setBusy(false); };
+  return <span style={{ display:"inline-flex", gap:6, alignItems:"center" }}>
+    <select aria-label="Export results" value="" disabled={busy} onChange={e=>{ const f=e.target.value; e.target.value=""; if (f) go(f); }} style={{ ...pill(false), padding:"5px 8px", cursor:"pointer" }}>
+      <option value="">{busy? "Exporting…" : "Export results…"}</option><option value="csv">CSV</option><option value="xlsx">Excel (.xlsx)</option><option value="docx">Word (.docx)</option><option value="pptx">PowerPoint (.pptx)</option><option value="pdf">PDF (print)</option></select>
+    {msg && <span role="status" style={{ fontSize:11, color: /failed|Allow|Nothing/.test(msg)? C.red : C.teal }}>{msg}</span>}</span>;
+}
 function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry, incoming }) {
   const [data,setData]=useState(null); const [fileErr,setFileErr]=useState("");
   const [cfg,setCfg]=useState({ y:"", d:"", treatValue:"", covs:[], exact:[], squares:false, missing:"drop", estimand:"ATT", trim:0, M:1, metric:"mahalanobis", replace:true, biasAdj:true, caliper:0, strata:5, cemBins:0, B:199, ipwSE:"bootstrap", miM:10,
@@ -91,8 +102,8 @@ function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry
           setBoot(null); }
       }catch(e){ console.error(e); setOut({ error:"The analysis failed: "+e.message }); setBusy(false); }
     }, 30); };
-  const exportCSV=()=>{ if(!out?.results) return; dlCSV(out.results.map(r=>({ method:r.method, estimand:r.estimand, estimate:r.est, se:r.se, ci_low:r.lo, ci_high:r.hi, p_value:r.p, n_treated:r.nT, n_control:r.nC, max_abs_smd_after: Math.max(...(r.balance||[]).map(b=>Math.abs(b.smdAfter))), L1:r.L1 })), "ecoscope_matching_estimates.csv");
-    const r=out.results[pick]; if (r?.balance) dlCSV(r.balance.map(b=>({ covariate:b.name, mean_treated:b.meanT, mean_control_before:b.meanC, smd_before:b.smdBefore, mean_treated_after:b.meanTAfter, mean_control_after:b.meanCAfter, smd_after:b.smdAfter, var_ratio_after:b.vrAfter })), "ecoscope_balance.csv"); };
+  const exportCSV=(fmt="csv")=>{ const _T=[]; const _dl=(rows,name)=>_T.push({ rows, name }); if(!out?.results) return; _dl(out.results.map(r=>({ method:r.method, estimand:r.estimand, estimate:r.est, se:r.se, ci_low:r.lo, ci_high:r.hi, p_value:r.p, n_treated:r.nT, n_control:r.nC, max_abs_smd_after: Math.max(...(r.balance||[]).map(b=>Math.abs(b.smdAfter))), L1:r.L1 })), "ecoscope_matching_estimates.csv");
+    const r=out.results[pick]; if (r?.balance) _dl(r.balance.map(b=>({ covariate:b.name, mean_treated:b.meanT, mean_control_before:b.meanC, smd_before:b.smdBefore, mean_treated_after:b.meanTAfter, mean_control_after:b.meanCAfter, smd_after:b.smdAfter, var_ratio_after:b.vrAfter })), "ecoscope_balance.csv");  return labExport(fmt, "Matching", _T); };
   const H=data?.headers||[]; const cur=out?.results?.[pick];
   const numericCovs = useMemo(()=>{ if(!data) return {}; const m={}; H.forEach((h,i)=>{ const vals=data.rows.slice(0,400).map(r=>r[i]).filter(v=>v!=null&&String(v).trim()!==""); const uniq=new Set(vals); m[h]={ num: vals.every(v=>!isNaN(parseFloat(String(v).replace(/[$,%\s]/g,"")))), uniq:uniq.size }; }); return m; },[data]);
 
@@ -216,7 +227,7 @@ function MatchingTab({ isMobile, imported, basket=[], eco, years, defaultCountry
           <LabNote>Estimates are causal only if treatment is as good as random once you condition on the selected covariates (CIA), and treated and control units overlap. CIA cannot be tested; overlap and balance can, below.</LabNote>
           {out.warnings.map((w,i)=><LabNote key={i} tone="warn">{w}</LabNote>)}
           <LabSec title="Estimates across methods" sub={`${out.prep.n.toLocaleString()} units used (${out.prep.nT.toLocaleString()} treated, ${out.prep.nC.toLocaleString()} control)${out.prep.dropped?` · ${out.prep.dropped} rows dropped for missing values`:""}${out.prep.imputedCells?` · ${out.prep.imputedCells.toLocaleString()} covariate values imputed`:""}. ${out.prep.mi?` · pooled over ${out.prep.mi} imputations`:""}. Large disagreement across methods signals model dependence.`}
-            right={<button type="button" onClick={exportCSV} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}}><Ico n="file"/> Export CSV</button>}>
+            right={<LabExport onExport={exportCSV}/>}>
             {boot&&<div role="status" style={{fontSize:11,color:C.mid,marginBottom:8}}>{boot.label==="Imputation"? "Analysing imputed dataset" : "Bootstrapping IPW standard error…"} {boot.k}/{boot.n}</div>}
             <div style={{overflowX:"auto"}}>
               <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -384,8 +395,8 @@ function SynthTab({ defaultCountry, defaultVar, isMobile, imported, basket=[], e
   const gapData = res? res.years.map((y,t)=>{ const row={ year:y, treated:res.gap[t] }; (pv?.keep||[]).forEach((p,i)=>row["p"+i]=p.gap[t]); return row; }) : [];
   const looData = res? res.years.map((y,t)=>{ const row={ year:y, actual:res.treated.y[t], synthetic:res.synth[t] }; res.loo.forEach((l,i)=>row["l"+i]=l.synth[t]); return row; }) : [];
   const fmtY = (v)=>ciFmtVal(v, yVar?.fmt||"num");
-  const exportCSV=()=>{ if(!res) return; dlCSV(res.years.map((y,t)=>({ year:y, treated:res.treated.y[t], synthetic:res.synth[t], gap:res.gap[t] })), `ecoscope_synth_${res.treated.id}_${cfg.y}.csv`);
-    dlCSV(res.weights.map(w=>({ donor:w.name, weight:w.w })), `ecoscope_synth_weights_${res.treated.id}.csv`); };
+  const exportCSV=(fmt="csv")=>{ const _T=[]; const _dl=(rows,name)=>_T.push({ rows, name }); if(!res) return; _dl(res.years.map((y,t)=>({ year:y, treated:res.treated.y[t], synthetic:res.synth[t], gap:res.gap[t] })), `ecoscope_synth_${res.treated.id}_${cfg.y}.csv`);
+    _dl(res.weights.map(w=>({ donor:w.name, weight:w.w })), `ecoscope_synth_weights_${res.treated.id}.csv`);  return labExport(fmt, "Synthetic control", _T); };
   const axis={ tick:{fill:C.mid,fontSize:11}, axisLine:{stroke:C.border}, tickLine:false };
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"minmax(0,1fr)":"320px minmax(0,1fr)",gap:16,alignItems:"start"}}>
@@ -508,7 +519,7 @@ function SynthTab({ defaultCountry, defaultVar, isMobile, imported, basket=[], e
             <div style={{fontSize:11,color:C.dim,marginTop:8,lineHeight:1.55}}>Placebo SEs re-assign the policy to donors and re-estimate the weights each time (Arkhangelsky et al. 2021, Algorithm 4); they assume treatment assignment is exchangeable across units. The synthdid rows use the outcome path only; the first row uses your predictor specification.</div>
           </LabSec>}
           {extra?.pen&&!extra?.est?.length&&<LabNote>Penalized synthetic control (λ = {extra.pen.lambda}): average post-policy gap {fmtY(extra.pen.att)}, pre-period RMSPE {fmtY(extra.pen.preRMSPE)}, {extra.pen.nUsed} donors used.</LabNote>}
-          <LabSec title={`${res.treated.name} vs synthetic ${res.treated.name}`} sub={yVar?.name} right={<div style={{display:"flex",gap:6,flexWrap:"wrap"}}><button type="button" onClick={exportCSV} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}}><Ico n="file"/> Results CSV</button><button type="button" onClick={downloadPanel} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}} title="The panel used in this run, in long format, with an imputed flag"><Ico n="sheet"/> Panel CSV</button></div>}>
+          <LabSec title={`${res.treated.name} vs synthetic ${res.treated.name}`} sub={yVar?.name} right={<div style={{display:"flex",gap:6,flexWrap:"wrap"}}><LabExport onExport={exportCSV}/><button type="button" onClick={downloadPanel} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}} title="The panel used in this run, in long format, with an imputed flag"><Ico n="sheet"/> Panel CSV</button></div>}>
             <ResponsiveContainer width="100%" height={280}>
               <LineChart data={pathData} margin={{top:8,right:16,left:8,bottom:4}}>
                 <CartesianGrid stroke={C.border} strokeOpacity={0.8} vertical={false}/>
@@ -679,8 +690,8 @@ function DidTab({ isMobile, imported, basket=[], eco, years, defaultCountry, inc
     if (out.twfe) S.push({ name:"TWFE event study", color:C.purple, dash:"3 2", pts:[...out.twfe.event.coef.filter(c=>inWin(c.k)).map(c=>({ e:c.k, est:c.est, lo:c.est-1.96*c.se, hi:c.est+1.96*c.se })), ...(inWin(-1)? [{ e:-1, est:0, lo:NaN, hi:NaN, ref:true }] : [])] });
     if (out.bjs) S.push({ name:"Imputation (BJS)", color:C.teal, pts: out.bjs.byE.filter(x=>inWin(x.e)&&x.e>=0).map(x=>({ e:x.e, est:x.est, lo:x.est-1.96*x.se, hi:x.est+1.96*x.se })) });
     return S; },[out, cfg.kMin, cfg.kMax]);
-  const exportCSV=()=>{ if (!out?.cs) return; dlCSV(out.cs.cells.map(c=>({ cohort:meTL(out.P,c.g), period:meTL(out.P,c.t), event_time:c.e, att:c.att, se:c.se, post:c.post, base_period:c.base??"" })), "ecoscope_att_gt.csv");
-    if (out.agg) dlCSV(out.agg.dynamic.per.map(x=>({ event_time:x.key, att:x.est, se:x.se, ci_low:x.est-1.96*x.se, ci_high:x.est+1.96*x.se, uniform_low:x.est-out.crit*x.se, uniform_high:x.est+out.crit*x.se })), "ecoscope_event_study.csv"); };
+  const exportCSV=(fmt="csv")=>{ const _T=[]; const _dl=(rows,name)=>_T.push({ rows, name }); if (!out?.cs) return; _dl(out.cs.cells.map(c=>({ cohort:meTL(out.P,c.g), period:meTL(out.P,c.t), event_time:c.e, att:c.att, se:c.se, post:c.post, base_period:c.base??"" })), "ecoscope_att_gt.csv");
+    if (out.agg) _dl(out.agg.dynamic.per.map(x=>({ event_time:x.key, att:x.est, se:x.se, ci_low:x.est-1.96*x.se, ci_high:x.est+1.96*x.se, uniform_low:x.est-out.crit*x.se, uniform_high:x.est+out.crit*x.se })), "ecoscope_event_study.csv");  return labExport(fmt, "Difference-in-differences", _T); };
 
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"minmax(0,1fr)":"320px minmax(0,1fr)",gap:16,alignItems:"start"}}>
@@ -771,7 +782,7 @@ function DidTab({ isMobile, imported, basket=[], eco, years, defaultCountry, inc
             {out.nNever===0&&<div style={{fontSize:11,color:C.orange,marginTop:6}}>No never-treated units: comparisons rely on not-yet-treated units.</div>}
           </LabSec>
           <LabSec title="Average effect on the treated" sub={out.staggered? "Staggered adoption: rely on the heterogeneity-robust rows; TWFE is shown as a benchmark." : "Single adoption date: all estimators target the same ATT."}
-            right={out.cs&&<button type="button" onClick={exportCSV} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}}><Ico n="file"/> Export CSV</button>}>
+            right={out.cs&&<LabExport onExport={exportCSV}/>}>
             <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr>{["Estimator","Estimate","SE","95% CI","p"].map((h,i)=><th key={h} scope="col" style={{...thS,textAlign:i?"right":"left"}}>{h}</th>)}</tr></thead>
               <tbody>{out.rows.map((r,i)=><tr key={i} style={{background:r.headline?`${C.gold}12`:"transparent"}}><td style={{...tdS,whiteSpace:"normal",minWidth:230,fontWeight:r.headline?600:400}}>{r.method}{r.note&&<div style={{fontSize:11,color:C.dim,fontWeight:400,marginTop:2}}>{r.note}</div>}</td>
@@ -860,8 +871,8 @@ function HighDimTab({ isMobile, imported, incoming }) {
       setProg(null); setOut(res); setBusy("");
     }catch(e){ console.error(e); setOut({ error:"The analysis failed: "+e.message }); setBusy(""); setProg(null); } }, 30); };
   const fmt=(v)=>ciFmt(v, Math.abs(v)<10? 4 : 2);
-  const exportCSV=()=>{ if (!out?.rows) return; dlCSV(out.rows.map(r=>({ method:r.method, estimate:r.est, se:r.se, ci_low:r.lo, ci_high:r.hi, p_value:r.p })), "ecoscope_highdim_estimates.csv");
-    if (out.pds) dlCSV(out.pds.selected.map(s=>({ control:s.name, selected_by_outcome_lasso:s.byY?1:0, selected_by_treatment_lasso:s.byD?1:0 })), "ecoscope_pds_selected_controls.csv"); };
+  const exportCSV=(fmt="csv")=>{ const _T=[]; const _dl=(rows,name)=>_T.push({ rows, name }); if (!out?.rows) return; _dl(out.rows.map(r=>({ method:r.method, estimate:r.est, se:r.se, ci_low:r.lo, ci_high:r.hi, p_value:r.p })), "ecoscope_highdim_estimates.csv");
+    if (out.pds) _dl(out.pds.selected.map(s=>({ control:s.name, selected_by_outcome_lasso:s.byY?1:0, selected_by_treatment_lasso:s.byD?1:0 })), "ecoscope_pds_selected_controls.csv");  return labExport(fmt, "High-dimensional controls", _T); };
   return (
     <div style={{display:"grid",gridTemplateColumns:isMobile?"minmax(0,1fr)":"320px minmax(0,1fr)",gap:16,alignItems:"start"}}>
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
@@ -916,7 +927,7 @@ function HighDimTab({ isMobile, imported, incoming }) {
         {out?.rows&&<>
           {out.notes.map((n,i)=><LabNote key={i} tone="warn">{n}</LabNote>)}
           <LabSec title="Estimates" sub={`${out.n.toLocaleString()} observations · ${out.p} candidate controls${out.dropped?` · ${out.dropped} rows dropped for missing values`:""} · ${out.binary? "binary" : "continuous"} treatment`}
-            right={<button type="button" onClick={exportCSV} style={{...pill(false),display:"inline-flex",gap:6,alignItems:"center"}}><Ico n="file"/> Export CSV</button>}>
+            right={<LabExport onExport={exportCSV}/>}>
             <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}>
               <thead><tr>{["Method","Estimate","SE","95% CI","p"].map((h,i)=><th key={h} scope="col" style={{...thS,textAlign:i?"right":"left"}}>{h}</th>)}</tr></thead>
               <tbody>{out.rows.map((r,i)=><tr key={i} style={{background:r.headline?`${C.gold}12`:"transparent"}}><td style={{...tdS,whiteSpace:"normal",minWidth:230,color:r.group==="bench"?C.mid:C.text,fontWeight:r.headline?600:400}}>{r.method}{r.note&&<div style={{fontSize:11,color:C.dim,fontWeight:400,marginTop:2}}>{r.note}</div>}</td>
@@ -1351,7 +1362,7 @@ const SUPPORT_FAQ = [
   { q: "Why is my chart empty?", k: "empty chart blank no data nothing shows missing", a: "The source has no data for that country, variable or year range. Widen the years in the sidebar, pick another country, or try the World Bank version of the indicator. Recent years are often not published yet." },
   { q: "Why won't a data source load?", k: "source not loading locked pro fred who imf error fail", a: "Sources marked with a lock need a Pro or Enterprise plan (Settings → Subscription). FRED needs an API key and covers the United States only. Some IMF series have no World Bank equivalent and return nothing. If a source still fails, send us the source and variable name from the Support tab." },
   { q: "How do I compare countries?", k: "compare comparison two countries second country", a: "Tick Compare countries at the bottom of the left sidebar and choose a second country. Comparison is part of the Pro plan." },
-  { q: "How do I export data or charts?", k: "export download csv excel xls pdf png svg save", a: "Use the Export button above the chart: CSV (raw numbers, re-usable as a panel), Excel and PDF report. Snapshot saves the chart as PNG or SVG. Excel and PDF need a Pro plan." },
+  { q: "How do I export data or charts?", k: "export download csv excel xls pdf png svg jpeg jpg webp powerpoint pptx word docx snapshot picture image save", a: "Use the Export button above the chart: CSV (raw numbers, re-usable as a panel), Excel, PDF report, Word (.docx) or PowerPoint (.pptx); Excel, PDF, Word and PowerPoint need a Pro plan. Snapshot saves the chart as PNG, JPEG, WebP, SVG or PDF, copies it to the clipboard, or saves it to My snapshots (open it from the same menu to download any saved chart again in any picture type)." },
   { q: "How do I add more variables to the chart?", k: "basket add variable multiple series several variables", a: "Click variables in the list on the left. Each one joins your basket (numbered badges) and is drawn as a separate series. Click again to remove it." },
   { q: "How do transforms work?", k: "transform log growth percent change difference moving average zscore index", a: "Open the Transform tab under the variable list and pick log, first difference, % change, moving average, z-score, min-max or cumulative sum. The transform applies to every series in the basket and carries into the Impact Lab if you choose." },
   { q: "How do I fill missing years?", k: "impute imputation missing gaps interpolate forward fill mean", a: "Use the Impute tab: linear interpolation, forward fill, backward fill or mean. Imputed values are treated as data, so causal estimates using them show a warning." },
@@ -1383,7 +1394,7 @@ const SUPPORT_FAQ = [
   { q: "Can I type formulas in table cells like Excel?", k: "cell formula excel equals = fill down formula bar fx calculate cell value A1 B2 reference range sum select highlight drag fill handle copy paste series", a: "Yes. In Workbench → Datasets the table works like Excel. Click a cell to select it, drag or Shift+arrows to select a range, and click a column letter or row number to select a whole column or row. Double-click or just type to edit. A formula starts with = and can use column names (=gdp / pop * 100) or cells (=B2*C2, =SUM(B2:B10), =$B$1*2). Drag the small square at the corner of the selection to fill down, up or sideways: numbers and dates continue as a series (hold Ctrl to copy), formulas shift their references. Ctrl+C and Ctrl+V copy and paste (also from Excel), Ctrl+D fills down, Delete clears. Errors show as #DIV/0!, #REF!, #N/A and the like; #CIRC! means a formula uses its own result." },
   { q: "How do I keep a cell reference fixed when I drag a formula (absolute vs relative)?", k: "absolute relative reference dollar $ F4 fixed lock anchor drag fill copy formula excel indirect row column address", a: "Like Excel. While editing a formula, put the cursor on a reference and press F4: A1 → $A$1 → A$1 → $A1. The part with $ stays fixed when you drag the fill handle; the rest moves with each cell it reaches. The Fill menu in the formula bar switches dragging between relative (Excel's way), absolute (the same formula in every cell) and values only. ROW(), COLUMN(), ADDRESS() and INDIRECT(\"B2\") also work; INDIRECT never shifts." },
   { q: "What is the Data Vault?", k: "data vault curated premium datasets subscription published source documents citation micro macro qualitative quantitative primary secondary", a: "The Data Vault (◆ under Data Level in the sidebar) holds datasets prepared and checked by the EcoScope team, with their source, how to cite them and the supporting documents (reports, questionnaires, original tables) so you can check the data. Pick a category, open a dataset, then view it, open it in the Workbench or download it if allowed. What you see depends on your plan; if the button is missing, nothing is published for your plan yet." },
-  { q: "How do I export results to Word, Excel, PDF or LaTeX?", k: "export download save word docx excel xlsx pdf latex tex overleaf table chart png svg esttab report", a: "In Formulas (EcoScript) → Results: each table has Export… (LaTeX copy or .tex, Excel, Word, PDF), each chart has Export chart… (PNG, SVG, Word, PDF), and Export all results… at the top saves everything in one Word file, a PDF, an Excel file (one sheet per result) or a LaTeX .zip ready for Overleaf. In a script, to_esttab m1 m2, latex prints a booktabs table you can copy." },
+  { q: "How do I export results to Word, Excel, PDF or LaTeX?", k: "export download save word docx excel xlsx pdf latex tex overleaf table chart png svg jpeg jpg webp powerpoint pptx slides csv esttab report regression", a: "In Formulas (EcoScript) → Results: each table has Export… (LaTeX copy or .tex, Excel, CSV, Word, PowerPoint, PDF), each chart has Export chart… (PNG, JPEG, WebP, SVG, PDF, Word, copy, or Save to My snapshots), and Export all results… at the top saves everything in one Word file, one PowerPoint deck (one slide per table and chart), a PDF, an Excel file (one sheet per result), a CSV or a LaTeX .zip ready for Overleaf. Impact Lab tools have Export results… with CSV, Excel, Word, PowerPoint and PDF. In a script, to_esttab m1 m2, latex prints a booktabs table you can copy." },
   { q: "Can EcoScript bootstrap standard errors?", k: "bootstrap standard errors replications reps seed cluster resample two stage 2sls control function", a: "Yes: to_bootstrap, reps(200) seed(1) cluster(county): to_reg dlearn z1 i.year ; to_predict dhat ; to_reg dlafdc dhat i.year. Commands after the colon are separated by ; and the last model's coefficients are bootstrapped. cluster() resamples whole units so panel lags stay correct. A counter shows progress and Stop works." },
   { q: "How do I stop a script that is running?", k: "stop terminate quit cancel abort running script ecoscript long slow escape", a: "Press the red Stop button next to Run script, or Esc inside the script box. EcoScope finishes the line it is on and stops; the Results show what ran before that. Nothing is saved to the dataset until you press Save." },
   { q: "How do I change my email or delete my account?", k: "account delete remove close account update email name profile organisation", a: "Settings → Account. Change display name, email, country, organisation or job title and press Update account. To delete the account, go to the bottom of Account, enter your password, type DELETE and confirm. Everything you own is removed and cannot be recovered, so download any datasets you need first." },
@@ -1396,7 +1407,7 @@ const SUPPORT_FAQ = [
   { q: "Can I make 3D charts or change the dashboard background?", k: "3d three dimensional 2d surface rotate turn spin background colour color gradient theme style cards", a: "Yes. In Chart settings, the 3D group has 3D columns, 3D surface, 3D lines (ribbons) and 3D scatter. Column, bar, line and area charts also have a 3D button in their top bar to show the same chart in 3D (press 2D to go back). Drag to turn, use the mouse wheel to zoom, double-click to reset, and press Spin to rotate it slowly. For the background, open a dashboard and press Background: pick a preset (Ocean, Forest, Kente, Paper and more), your own colour or a two-colour gradient, and a chart card style (Solid, See-through, Floating or Flat). Each dashboard keeps its own look." },
   { q: "How do I delete or rename a dashboard?", k: "delete remove rename dashboard tab summary", a: "On the Data summary page, Your dashboards lists each dashboard with Open, Rename, Duplicate and Delete. You can also press the ✕ next to a dashboard's tab at the top, or Delete dashboard inside it. Deleting a dashboard does not delete your data; data cards on the summary have their own Delete button for datasets." },
   { q: "How do dashboard filters and interactions work?", k: "dashboard filter click cross filter zoom legend expand export png svg csv print pdf", a: "Click a bar, slice, cell or calendar day to filter every chart on the dashboard to that value; click it again or press ✕ on the filter to clear it. + Add filter filters by a list of values or a range (for example year 2015 to 2024). Hover for exact values, click legend names to hide a series, use the zoom slider on time charts, and press ⤢ to expand a chart. The ⋯ menu downloads a chart as PNG or SVG or its data as CSV, and changes size or order. Print / save as PDF prints the whole dashboard." },
-  { q: "Can I share a project or invite someone?", k: "share invite collaborate team colleague member join workspace project editor viewer access", a: "Yes. Open Projects (briefcase button at the top), find your project under My projects and press Share. Type the other person's EcoScope username or email, choose Can edit or Can view, and press Invite. EcoScope confirms which account it shared with. They need their own account and must be signed in as that account: the project appears under Shared with me in their Projects within a minute, with a notice. Your project card lists who it is shared with. To stop sharing, press Share / remove people, then Remove and Yes, remove next to the person. Editors' changes save to the same project and History shows who made each change. Viewers can explore, but nothing they do is saved; they can press Make my own copy. Only the owner can rename, share or delete the project." },
+  { q: "Can I share a project or invite someone?", k: "share invite collaborate team colleague member join workspace project editor viewer access", a: "Yes. Open Projects (briefcase button at the top), find your project under My projects and press Share. Type the other person's EcoScope username or email, choose Can edit or Can view, and press Invite. Someone without an account gets an emailed invitation: they choose a username and password and join straight into the project. People who already have an account get an email saying it was shared. In the project, the Chat button at the top opens a live chat with everyone who has access: the project appears under Shared with me in their Projects within a minute, with a notice. Your project card lists who it is shared with. To stop sharing, press Share / remove people, then Remove and Yes, remove next to the person. Editors' changes save to the same project and History shows who made each change. Viewers can explore, but nothing they do is saved; they can press Make my own copy. Only the owner can rename, share or delete the project." },
   { q: "What happens when two people edit the same project?", k: "conflict overwrite two people same time shared edit changes lost their version keep mine", a: "EcoScope checks for changes from others every 30 seconds. If someone else saved and you have no unsaved changes, your screen updates with their version. If you both changed it, an orange notice appears: Load their version (drops your unsaved changes) or Keep mine (saves yours over theirs; their version stays in History and can be restored). Large tables over about 150,000 cells stay in the browser they were added in, so other people see them as Not on this device; export and send those as CSV." },
   { q: "How do I leave a project someone shared with me?", k: "leave shared project remove myself stop sharing unshare", a: "Open Projects, find it under Shared with me and press Leave. It disappears from your list; the owner can share it again. To keep a copy first, press Copy to my projects. Owners stop sharing by opening Share and pressing the ✕ next to a person." },
   { q: "Why is a large file slow, and how do I handle it?", k: "slow large big file million rows freeze hang performance panel firms tickers", a: "A file with very many rows per date (for example 500 firms × 10 years of daily prices) is a long panel. When you import it, EcoScope asks what to chart: one unit, several units side by side, or the average. The full file is kept in Data Workbench in this browser's storage (not uploaded with the project), so the app stays fast. Use Formulas or Merge & append there to filter or summarise it." },
@@ -1408,7 +1419,8 @@ const SUPPORT_FAQ = [
   { q: "What is a shadow price?", k: "shadow price dual value binding slack reduced cost sensitivity", a: "In Optimization results, the shadow price of a limit is how much the best objective would change if that limit were one unit larger, for small changes. Binding limits are fully used (slack 0); limits with slack have a shadow price of 0. Reduced cost shows how much the objective would change if a zero-valued decision were forced up by one unit. Integer models do not report shadow prices." },
   { q: "Can I mix variables from different sources on one chart?", k: "different sources mix world bank imf fred combine variables basket two axes scale units index", a: "Yes. Add a variable, click another source (IMF, FRED, WHO…) and add more: the basket keeps them all and the chart, table, stats and exports use every variable. When units differ, use Scale next to the vars badge: Auto or Two axes puts the second unit on a right-hand axis; Index sets each series to 100 in its first year." },
   { q: "How do I delete several datasets or documents at once?", k: "delete remove several multiple select all clear documents datasets", a: "In Data Workbench → Datasets, tick the boxes (or Select all) and press Delete selected. In Text coding → 1. Documents, tick documents and press Remove selected, or Remove all. Every deletion is in Project history, so you can restore it." },
-  { q: "How do I change my password?", k: "password change reset forgot security", a: "Settings → Password & security. Enter your current password and a new one twice. If you forgot your password, sign out and use Forgot password on the sign-in screen, or message support." },
+  { q: "How do I change my password?", k: "password change reset forgot security", a: "Settings → Password & security. Enter your current password and a new one twice. If you forgot your password, press Forgot password? on the sign-in screen and enter your email or username: an email with a link arrives (check spam); the link works once for 60 minutes and lets you choose a new password." },
+  { q: "How do I chat with my collaborators?", k: "chat message talk collaborator team live project chat mention typing online", a: "Open a project you share (or share yours from Projects → Share), then press Chat at the top. Everyone with access sees the same chat live: who is online, who is typing, and new messages within seconds. Type @ and a name, or click a name at the top of the chat, to mention someone. You can edit or delete your own messages; the owner can remove any message." },
   { q: "How do I change the theme?", k: "theme dark light appearance colour color", a: "Settings → Appearance. Choose Graphite, Paper, Navy, Ledger or Terminal and press Save changes." },
   { q: "How do I upgrade my plan?", k: "upgrade plan pro enterprise billing subscription price", a: "Settings → Subscription → Request an upgrade, or Request plan upgrade in the account menu. An administrator reviews the request." },
   { q: "What are AI insights?", k: "ai insight claude anthropic narrative deep analysis", a: "Analyze Data gives a free built-in statistical summary. Deep Analysis sends the computed statistics to Claude for a written interpretation and needs a Pro plan." },
@@ -1443,7 +1455,7 @@ const ChatLog = ({ msgs, me = "user", emptyText }) => {
             <div style={{ fontSize: 10.5, color: C.dim, marginBottom: 2, textAlign: mine ? "right" : "left" }}>
               {m.sender === "bot" ? "Assistant" : m.sender === "admin" ? "EcoScope support" : (m.username || "You")}{m.category ? ` · ${SUPPORT_CATS.find(c => c[0] === m.category)?.[1] || m.category}` : ""} · {ciFmtTime(m.created_at)}
             </div>
-            <div style={{ background: mine ? `${col}22` : C.card, border: `1px solid ${mine ? col + "55" : C.border}`, borderRadius: 8, padding: "8px 11px", color: C.text, fontSize: 13, lineHeight: 1.55, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{m.body}</div>
+            <div style={{ background: mine ? `${col}22` : C.card, border: `1px solid ${mine ? col + "55" : C.border}`, borderRadius: 8, padding: "8px 11px", color: C.text, fontSize: 13, lineHeight: 1.55, whiteSpace: m.sender === "bot" ? "normal" : "pre-wrap", overflowWrap: "anywhere" }}>{m.sender === "bot" ? <MiniMd text={m.body} /> : m.body}</div>
             {m.related?.length > 0 && <div style={{ fontSize: 11, color: C.mid, marginTop: 4 }}>Related: {m.related.join(" · ")}</div>}
           </div>
         </React.Fragment>; })}
@@ -1457,17 +1469,20 @@ function SupportChat({ user, open, setOpen, mode, setMode }) {
   const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [unread, setUnread] = useState(0);
   const inputRef = useRef(null);
   const loadThread = useCallback(async () => { const r = await US.supportMessages(user.username); if (Array.isArray(r)) { setSMsgs(r.filter(m => m.channel !== "assistant")); setUnread(r.filter(m => m.sender === "admin" && !m.read_by_user).length); } }, [user.username]);
-  useEffect(() => { loadThread(); const t = setInterval(loadThread, open && mode === "support" ? 8000 : 30000); return () => clearInterval(t); }, [loadThread, open, mode]);
+  const [team, setTeam] = useState({ team_online: false, team_typing: false }); const lastTyping = useRef(0);
+  const live = open && mode === "support";
+  useEffect(() => { loadThread(); const tick = () => { if (document.hidden) return; loadThread(); if (live) US.supportPresence().then(r => { if (r && !r.error) setTeam(r); }); };
+    if (live) US.supportPresence().then(r => { if (r && !r.error) setTeam(r); }); const t = setInterval(tick, live ? 3000 : 30000); return () => clearInterval(t); }, [loadThread, live]);
   useEffect(() => { if (open && mode === "support" && unread) { US.supportMarkRead(user.username, "user").then(loadThread); } }, [open, mode, unread, user.username, loadThread]);
   useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 50); }, [open, mode]);
   const now = () => new Date().toISOString();
-  const send = async (e) => { e?.preventDefault(); const body = text.trim(); if (!body || busy) return; setErr(""); setText("");
+  const send = async (e, direct) => { e?.preventDefault(); const body = (direct || text).trim(); if (!body || busy) return; setErr(""); setText("");
     if (mode === "assistant") {
       const q = { sender: "user", body, created_at: now(), username: "You" }; setAMsgs(m => [...m, q]); setBusy(true);
-      let ans = await US.supportAssistant(body, aMsgs.slice(-8).map(m => ({ role: m.sender === "bot" ? "assistant" : "user", content: m.body })));
+      let ans = await US.supportAssistant(body, aMsgs.slice(-8).map(m => ({ role: m.sender === "bot" ? "assistant" : "user", content: m.body })), window.__ecoHelpContext || null);
       if (!ans?.answer) { const kb = ciKbAnswer(body); ans = kb ? { answer: kb.answer, related: kb.related } : { answer: "I don't have a good answer for that. You can start over with a different question, or send it to the EcoScope team, who will reply here.", unanswered: true }; }
       else if (/support tab|can(no|')t help|not able to help|don't know|outside (what|the scope)/i.test(ans.answer)) ans.unanswered = true;
-      setAMsgs(m => [...m, { sender: "bot", body: ans.answer, related: ans.related, created_at: now(), unanswered: !!ans.unanswered }]); setBusy(false);
+      setAMsgs(m => [...m, { sender: "bot", body: ans.answer, related: ans.related, followups: ans.followups || [], actions: ans.actions || [], created_at: now(), unanswered: !!ans.unanswered }]); setBusy(false);
       US.supportSend({ username: user.username, email: user.email, sender: "user", channel: "assistant", body }).catch(() => {});
       US.supportSend({ username: user.username, email: user.email, sender: "bot", channel: "assistant", category: ans.unanswered ? "unanswered" : null, body: ans.answer }).catch(() => {});
     } else {
@@ -1491,7 +1506,7 @@ function SupportChat({ user, open, setOpen, mode, setMode }) {
         <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: 6, background: C.gold, color: C.onGold, display: "flex", alignItems: "center", justifyContent: "center" }}><Ico n={mode === "assistant" ? "sparkle" : "message"} s={16} /></div>
           <div style={{ flex: 1 }}><div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{mode === "assistant" ? "EcoScope assistant" : "EcoScope support"}</div>
-            <div style={{ fontSize: 11, color: C.mid }}>{mode === "assistant" ? "Answers about features and methods" : "Messages go to the EcoScope team"}</div></div>
+            <div style={{ fontSize: 11, color: C.mid }}>{mode === "assistant" ? "Ask about any feature, result or method" : team.team_online ? <><span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 4, background: "#3ecf8e", marginRight: 5 }} />The team is online, replies appear here</> : "Messages go to the EcoScope team; replies appear here"}</div></div>
           {mode === "assistant" && aMsgs.length > 0 && <button type="button" onClick={startOver} title="Start over" aria-label="Start a new conversation" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, height: 30, padding: "0 9px", color: C.mid, cursor: "pointer", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>↺ Start over</button>}
           <button type="button" onClick={() => setOpen(false)} aria-label="Close help" style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, width: 30, height: 30, color: C.mid, cursor: "pointer" }}>✕</button>
         </div>
@@ -1504,8 +1519,12 @@ function SupportChat({ user, open, setOpen, mode, setMode }) {
                 <ChatLog msgs={aMsgs} emptyText="Ask how any feature works, for example “How do I compare two countries?” or “What does ATT mean?”" />
                 {!aMsgs.length && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 12px" }}>{SUPPORT_FAQ.slice(0, 5).map(f => <button key={f.q} type="button" onClick={() => setText(f.q)} style={{ ...pill(false), fontSize: 11.5 }}>{f.q}</button>)}</div>}
                 {busy && <div style={{ padding: "0 14px 10px", fontSize: 12, color: C.mid }}>Assistant is typing…</div>}
+                {!busy && lastBot && !lastBot.unanswered && ((lastBot.actions || []).length > 0 || (lastBot.followups || []).length > 0) && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "2px 12px 12px" }}>
+                  {(lastBot.actions || []).filter(a => HELP_ACTIONS[a]).map(a => <button key={a} type="button" onClick={() => { runHelpAction(a); if (isMobile) setOpen(false); }} style={{ ...btn(), padding: "5px 10px", fontSize: 11.5 }}>{HELP_ACTIONS[a]} →</button>)}
+                  {(lastBot.followups || []).map(f => <button key={f} type="button" onClick={() => send(null, f)} style={{ ...pill(false), fontSize: 11.5, textAlign: "left" }}>{f}</button>)}</div>}
               </>
-            : <ChatLog msgs={sMsgs} emptyText="Describe a problem, a data issue or a request. The team's replies will appear here, and you can come back to this conversation any time." />}
+            : <><ChatLog msgs={sMsgs} emptyText="Describe a problem, a data issue or a request. The team's replies will appear here, and you can come back to this conversation any time." />
+                {team.team_typing && <div style={{ padding: "0 14px 10px", fontSize: 12, color: C.mid, fontStyle: "italic" }}>EcoScope support is typing…</div>}</>}
         </div>
         {mode === "assistant" && aMsgs.length > 0 && !busy && (lastBot?.unanswered
           ? <div role="status" style={{ padding: "8px 12px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", fontSize: 12, color: C.mid }}>
@@ -1518,7 +1537,7 @@ function SupportChat({ user, open, setOpen, mode, setMode }) {
         <form onSubmit={send} style={{ borderTop: `1px solid ${C.border}`, padding: 10 }}>
           {mode === "support" && <div role="group" aria-label="Topic" style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>{SUPPORT_CATS.map(([k, l]) => <button key={k} type="button" aria-pressed={cat === k} onClick={() => setCat(k)} style={{ ...pill(cat === k), fontSize: 11, padding: "3px 8px" }}>{l}</button>)}</div>}
           <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <textarea ref={inputRef} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} rows={2} aria-label={mode === "assistant" ? "Ask the assistant" : "Message to support"}
+            <textarea ref={inputRef} value={text} onChange={e => { setText(e.target.value); if (mode === "support" && e.target.value && Date.now() - lastTyping.current > 3000) { lastTyping.current = Date.now(); US.supportTyping(user.username).catch(() => {}); } }} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} rows={2} aria-label={mode === "assistant" ? "Ask the assistant" : "Message to support"}
               placeholder={mode === "assistant" ? "Ask a question…" : "Write your message…"} style={{ ...inp, fontSize: 13, resize: "none", lineHeight: 1.45 }} />
             <button type="submit" disabled={!text.trim() || busy} aria-label="Send" style={{ ...btn(), padding: "9px 14px", opacity: !text.trim() || busy ? 0.5 : 1 }}><Ico n="arrowup" s={16} /></button>
           </div>
@@ -1535,8 +1554,11 @@ function AdminSupportInbox({ admin }) {
   const [reply, setReply] = useState(""); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const loadThreads = useCallback(async () => { const r = await US.supportThreads(); if (Array.isArray(r)) setThreads(r); else if (r?.error) setErr(r.error); }, []);
   const loadMsgs = useCallback(async (u) => { if (!u) return; const r = await US.supportMessages(u); if (Array.isArray(r)) setMsgs(r); }, []);
-  useEffect(() => { loadThreads(); const t = setInterval(loadThreads, 15000); return () => clearInterval(t); }, [loadThreads]);
-  useEffect(() => { if (!sel) return; loadMsgs(sel); US.supportMarkRead(sel, "admin").then(loadThreads); const t = setInterval(() => loadMsgs(sel), 8000); return () => clearInterval(t); }, [sel, loadMsgs, loadThreads]);
+  useEffect(() => { loadThreads(); const t = setInterval(() => { if (!document.hidden) loadThreads(); }, 6000); return () => clearInterval(t); }, [loadThreads]);
+  const [userLive, setUserLive] = useState({}); const lastTyping = useRef(0);
+  useEffect(() => { if (!sel) return; loadMsgs(sel); US.supportMarkRead(sel, "admin").then(loadThreads);
+    const tick = () => { if (document.hidden) return; loadMsgs(sel); US.supportPresence(sel).then(r => { if (r && !r.error) setUserLive(r); }); };
+    tick(); const t = setInterval(tick, 3000); return () => { clearInterval(t); setUserLive({}); }; }, [sel, loadMsgs, loadThreads]);
   const shown = threads.filter(t => (filter === "all" || (filter === "unanswered" ? t.unanswered > 0 : (t.status || "open") === filter)) && (!q || `${t.username} ${t.email || ""} ${t.last_body || ""}`.toLowerCase().includes(q.toLowerCase())));
   const cur = threads.find(t => t.username === sel);
   const send = async (e) => { e.preventDefault(); const body = reply.trim(); if (!body) return; setBusy(true); setErr("");
@@ -1578,9 +1600,11 @@ function AdminSupportInbox({ admin }) {
             {(cur?.status || "open") === "open" ? <button type="button" onClick={() => setStatus("resolved")} style={{ ...pill(false), color: C.teal }}>Mark resolved</button> : <button type="button" onClick={() => setStatus("open")} style={pill(false)}>Reopen</button>}
             <button type="button" onClick={exportThread} style={{ ...pill(false), display: "inline-flex", gap: 6, alignItems: "center" }}><Ico n="file" /> Export</button>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", maxHeight: 470 }}><ChatLog msgs={visible} me="admin" emptyText="No messages yet." /></div>
+          <div style={{ flex: 1, overflowY: "auto", maxHeight: 470 }}><ChatLog msgs={visible} me="admin" emptyText="No messages yet." />
+            {userLive.user_typing && <div style={{ padding: "0 14px 8px", fontSize: 12, color: C.mid, fontStyle: "italic" }}>{sel} is typing…</div>}</div>
+          {userLive.user_online && <div style={{ fontSize: 11, color: C.teal, padding: "2px 12px" }}>● {sel} has the chat open</div>}
           <form onSubmit={send} style={{ borderTop: `1px solid ${C.border}`, padding: 10, display: "flex", gap: 8, alignItems: "flex-end" }}>
-            <textarea value={reply} onChange={e => setReply(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(e); }} rows={2} placeholder={`Reply to ${sel}… (Ctrl+Enter to send)`} aria-label="Reply" style={{ ...inp, fontSize: 13, resize: "vertical" }} />
+            <textarea value={reply} onChange={e => { setReply(e.target.value); if (e.target.value && Date.now() - lastTyping.current > 3000) { lastTyping.current = Date.now(); US.supportTyping(sel).catch(() => {}); } }} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) send(e); }} rows={2} placeholder={`Reply to ${sel}… (Ctrl+Enter to send)`} aria-label="Reply" style={{ ...inp, fontSize: 13, resize: "vertical" }} />
             <button type="submit" disabled={!reply.trim() || busy} style={{ ...btn(), padding: "9px 16px", opacity: !reply.trim() || busy ? 0.5 : 1 }}>{busy ? "Sending…" : "Send"}</button>
           </form>
         </>}

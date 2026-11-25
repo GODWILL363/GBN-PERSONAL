@@ -124,7 +124,7 @@ const US = {
     const res = await this._call('POST', '/api/users/invite', {email, role});
     if(res.error) return {error: res.error};
     window.dispatchEvent(new Event('ecoscope-update'));
-    return {user: res.user, inviteToken: res.token};
+    return {user: res.user, inviteToken: res.token, emailed: !!res.emailed, renewed: !!res.renewed};
   },
 
   async updateProfile(username, updates){
@@ -172,7 +172,15 @@ const US = {
   async supportThreads(){ return this._call('GET', '/api/support/threads'); },
   async supportMarkRead(username, reader){ return this._call('POST', '/api/support/read', {username, reader}); },
   async supportSetStatus(username, status){ return this._call('POST', '/api/support/status', {username, status}); },
-  async supportAssistant(question, history=[]){ const r = await this._call('POST', '/api/support/assistant', {question, history}); return r && !r.error ? r : null; },
+  async supportAssistant(question, history=[], context=null){ const r = await this._call('POST', '/api/support/assistant', {question, history, context}); return r && !r.error ? r : null; },
+  async supportPresence(username){ return this._call('GET', `/api/support/presence${username?`?username=${encodeURIComponent(username)}`:''}`); },
+  async supportTyping(username){ return this._call('POST', '/api/support/typing', {username}); },
+  async projectChat(id, after=0){ return this._p('GET', `/api/projects/${encodeURIComponent(id)}/chat${after?`?after=${after}`:''}`); },
+  async projectChatSend(id, body){ return this._p('POST', `/api/projects/${encodeURIComponent(id)}/chat`, {body}); },
+  async projectChatTyping(id){ return this._call('POST', `/api/projects/${encodeURIComponent(id)}/chat/typing`, {}); },
+  async projectChatEdit(id, mid, body){ return this._p('PATCH', `/api/projects/${encodeURIComponent(id)}/chat/${mid}`, {body}); },
+  async projectChatDelete(id, mid){ return this._p('DELETE', `/api/projects/${encodeURIComponent(id)}/chat/${mid}`); },
+  async projectChatLatest(ids){ return this._call('GET', `/api/projects-chat/latest?ids=${encodeURIComponent(ids.join(','))}`); },
 
   async resolveRequest(id, action, adminNote=''){
     await this._call('PATCH', `/api/requests/${id}`, {status: action, adminNote});
