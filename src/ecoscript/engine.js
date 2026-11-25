@@ -940,7 +940,7 @@ const stRun = (name, rest, S, line) => {
       add({ ...coefTable(names, r.beta, se, df, false), caption: `${y.name}` });
       add({ type: "note", text: `${seLabel(cl, rob)}.${omitted.length ? ` Omitted because of collinearity: ${omitted.join(", ")}.` : ""}${xs.filter(t => t.base != null).length ? ` Base levels: ${[...new Set(xs.filter(t => t.base != null).map(t => t.name.split("=")[0] + "=" + t.base))].join(", ")}.` : ""}${fe.length ? " The constant is absorbed by the fixed effects." : ""}` });
       const all = names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v);
-      store({ cmd, title: `${cmd === "reg" ? "OLS" : "Fixed effects"} of ${y.name}`, depvar: y.name, names, b: r.beta, se, V, df, N: r.n, r2, ar2, F: W && W.F, rmse: Math.sqrt(r.sigma2), isZ: false, vecs: all, n0: n, fe, use, resid: r.resid, link: "id", rss: r.sigma2 * df });
+      store({ cmd, title: `${cmd === "reg" ? "OLS" : "Fixed effects"} of ${y.name}`, depvar: y.name, yvec: y.v, names, b: r.beta, se, V, df, N: r.n, r2, ar2, F: W && W.F, rmse: Math.sqrt(r.sigma2), isZ: false, vecs: all, n0: n, fe, use, resid: r.resid, link: "id", rss: r.sigma2 * df });
       break; }
 
     case "logit": case "probit": { const tk = terms(P.main); if (tk.length < 2) throw new Error(`Syntax: ${ST_CMDS[cmd].syn}`); const y = tk[0], xs = tk.slice(1); const m = sample(); const cl = clusterOf(); const rob = !!(O.robust || O.r || O.vce === "robust");
@@ -965,7 +965,7 @@ const stRun = (name, rest, S, line) => {
       if (O.or && cmd === "logit") add({ type: "table", caption: `${y.name} (odds ratios)`, head: ["", "Odds ratio", "Std. err.", "z", "P>|z|", "[95% conf.", "interval]"], num: true, rows: names.map((nm, j) => { const z = b[j] / se[j]; const p = 2 * (1 - meNormCdf(Math.abs(z))); return [nm, stFmt(Math.exp(b[j]), 7) + stStars(p), stFmt(Math.exp(b[j]) * se[j], 7), stFmt(z, 4), stP(p), stFmt(Math.exp(b[j] - 1.96 * se[j]), 7), stFmt(Math.exp(b[j] + 1.96 * se[j]), 7)]; }) });
       else add({ ...coefTable(names, b, se, Infinity, true), caption: y.name });
       add({ type: "note", text: `${seLabel(cl, rob)}. Outcome: rows with ${y.name} ≠ 0 count as 1.` });
-      store({ cmd, title: `${cmd === "logit" ? "Logit" : "Probit"} of ${y.name}`, depvar: y.name, names, b, se, V, df: Infinity, N, r2: 1 - ll / ll0, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v), n0: n, link: cmd, cdf, pdf, use, ll, yv0: y.name });
+      store({ cmd, title: `${cmd === "logit" ? "Logit" : "Probit"} of ${y.name}`, depvar: y.name, yvec: y.v, names, b, se, V, df: Infinity, N, r2: 1 - ll / ll0, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v), n0: n, link: cmd, cdf, pdf, use, ll, yv0: y.name });
       break; }
 
     case "ivreg": { const pm = stIvSplit(P.main); if (!pm) throw new Error("Write the endogenous part in brackets: to_ivreg y x1 (x2 = z1 z2)");
@@ -985,7 +985,7 @@ const stRun = (name, rest, S, line) => {
       add({ ...coefTable(names, r2s.beta, se, Infinity, true), caption: y.name });
       add({ type: "table", caption: "First stage", head: ["Endogenous", "F (excluded instruments)", "Prob > F", "Rule of thumb"], num: true, rows: fs.map(f => [f.name, stFmt(f.F, 5), stP(f.p), f.F >= 10 ? "F ≥ 10: instruments look strong" : "F < 10: weak instruments, be careful"]) });
       add({ type: "note", text: `${seLabel(cl, rob)}. Standard errors use z (large-sample), the usual default for 2SLS.` });
-      store({ cmd, title: `2SLS of ${y.name}`, depvar: y.name, names, b: r2s.beta, se, V, df: Infinity, N, r2, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : ([...endo, ...exo].find(t => t.name === nm) || {}).v), n0: n, link: "id" });
+      store({ cmd, title: `2SLS of ${y.name}`, depvar: y.name, yvec: y.v, names, b: r2s.beta, se, V, df: Infinity, N, r2, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : ([...endo, ...exo].find(t => t.name === nm) || {}).v), n0: n, link: "id" });
       break; }
 
     case "ttest": { const m = sample(); const unequal = !!(O.unequal || O.welch); const stats = (x) => { const N = x.length; const mu = x.reduce((a, b) => a + b, 0) / N; const sd = Math.sqrt(x.reduce((a, b) => a + (b - mu) ** 2, 0) / (N - 1)); return { N, mu, sd, se: sd / Math.sqrt(N) }; };
@@ -1011,7 +1011,7 @@ const stRun = (name, rest, S, line) => {
     case "predict": { const e = S.est.last; if (!e) throw new Error("Run a model first (to_reg, to_logit, ...), then to_predict."); if (!e.vecs) throw new Error("to_predict needs a model run directly (not to_bootstrap). Run the model again, then to_predict."); if (e.fe && e.fe.length) throw new Error("to_predict after fixed-effects models is not available yet; use to_reg with i.unit dummies instead.");
       if (e.n0 !== n) throw new Error("Rows changed since the model ran. Put to_predict right after the model."); const nm = stUnq(P.main.split(/\s+/)[0]); if (!nm) throw new Error("Name the new column: to_predict yhat");
       const xb = Array.from({ length: n }, (_, i) => { let s = 0; for (let j = 0; j < e.names.length; j++) { const v = e.vecs[j]; const x = v ? v[i] : 1; if (!isFinite(x)) return NaN; s += e.b[j] * x; } return s; });
-      let v = xb; if (O.resid || O.residuals || O.r) { const yy = numv(S.findCol(e.depvar) || e.depvar); v = xb.map((x, i) => yy[i] - x); } else if ((O.pr || (!O.xb && e.link !== "id")) && e.cdf) v = xb.map(x => isFinite(x) ? e.cdf(x) : NaN);
+      let v = xb; if (O.resid || O.residuals || O.r) { const yc = S.findCol(e.depvar); const yy = e.yvec && e.yvec.length === n ? e.yvec : yc ? numv(yc) : null; if (!yy) throw new Error(`Cannot find the outcome ${e.depvar}; run the model again right before to_predict.`); v = xb.map((x, i) => yy[i] - x); } else if ((O.pr || (!O.xb && e.link !== "id")) && e.cdf) v = xb.map(x => isFinite(x) ? e.cdf(x) : NaN);
       S.setCol(nm, v); out.msg = `${nm}: ${O.resid || O.residuals || O.r ? "residuals" : (O.pr || (!O.xb && e.link !== "id")) ? "predicted probabilities" : "fitted values"} from ${e.name}`; out.changes = true; break; }
 
     case "test": { const e = S.est.last; if (!e) throw new Error("Run a model first, then to_test."); const R = []; const r = [];
@@ -1300,7 +1300,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
       if (O.irr) { add({ type: "table", head: ["", "IRR", "Std. err.", "z", "P>|z|", "[95% conf.", "interval]"], num: true, rows: names.map((nm, j) => { const z = b[j] / se[j]; const p = 2 * (1 - meNormCdf(Math.abs(z))); return [nm, stFmt(Math.exp(b[j]), 7) + stStars(p), stFmt(Math.exp(b[j]) * se[j], 7), stFmt(z, 4), stP(p), stFmt(Math.exp(b[j] - 1.959963984540054 * se[j]), 7), stFmt(Math.exp(b[j] + 1.959963984540054 * se[j]), 7)]; }) }); }
       else add(coefTable(names, b, se, Infinity, true));
       add({ type: "note", text: X.seLabel(cl, rob) }); const cdf = Math.exp; const pdf = Math.exp;
-      store({ cmd, title: `Poisson of ${y.name}`, depvar: y.name, names, b, se, V, df: Infinity, N, r2: 1 - ll / ll0, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v), n0: n, link: "log", cdf, pdf, use, ll }); return true; }
+      store({ cmd, title: `Poisson of ${y.name}`, depvar: y.name, yvec: y.v, names, b, se, V, df: Infinity, N, r2: 1 - ll / ll0, isZ: true, vecs: names.map(nm => nm === "_cons" ? null : (xs.find(t => t.name === nm) || {}).v), n0: n, link: "log", cdf, pdf, use, ll }); return true; }
 
     // ── after estimation ──
     case "estat": case "vif": { const sub = cmd === "vif" ? "vif" : (stTokens(P.main)[0] || "").toLowerCase(); const e = S.est.last; if (!e) throw new Error("Run a model first.");
@@ -1327,7 +1327,7 @@ const stMore = (cmd, X) => { const { P, O, S, n, add, kv, vars, numv, sample, te
         return [nm, stFmt(est, 7) + stStars(p), stFmt(se, 7), stFmt(z, 4), stP(p), stFmt(est - 1.959963984540054 * se, 7), stFmt(est + 1.959963984540054 * se, 7)]; });
       add({ type: "kv", items: [["Model", `${e.name} (${e.title})`], ["Number of obs", e.N.toLocaleString()], ["Expression", lin ? "Linear prediction" : e.link === "log" ? "Predicted number of events" : "Pr(" + e.depvar + ")"], [mode === "eyex" ? "ey/ex w.r.t." : "dy/dx w.r.t.", want.join(" ")], atm ? ["At", "means of the regressors"] : null].filter(Boolean) });
       add({ type: "table", head: ["", mode === "eyex" ? "ey/ex" : "dy/dx", "Delta-method std. err.", "z", "P>|z|", "[95% conf.", "interval]"], num: true, rows, note: want.some(x => x.includes("=")) && !atm ? "Category dummies (from i.) show the discrete change from the base level." : null }); out.msg = `${rows.length} ${mode === "eyex" ? "elasticit" + (rows.length > 1 ? "ies" : "y") : "marginal effect" + (rows.length > 1 ? "s" : "")}`; return true; }
-    case "rvfplot": { const e = lastReg("to_rvfplot"); const yy = numv(S.findCol(e.depvar) || e.depvar); const Xd = design(e); const rows = e.use.map((i, q) => { const f = meDot(Xd[q], e.b); return [f, yy[i] - f]; }).filter(() => !e.fe || !e.fe.length);
+    case "rvfplot": { const e = lastReg("to_rvfplot"); const yc = S.findCol(e.depvar); const yy = e.yvec && e.yvec.length === n ? e.yvec : yc ? numv(yc) : null; if (!yy) throw new Error(`Cannot find the outcome ${e.depvar}; run the model again right before to_predict.`); const Xd = design(e); const rows = e.use.map((i, q) => { const f = meDot(Xd[q], e.b); return [f, yy[i] - f]; }).filter(() => !e.fe || !e.fe.length);
       if (!rows.length) throw new Error("to_rvfplot works after to_reg without absorbed fixed effects."); add({ type: "chart", title: `Residuals against fitted values (${e.name})`, tab: { headers: ["Fitted values", "Residuals"], rows }, t: { type: "scatter", x: "Fitted values", ys: ["Residuals"], opts: { trend: false } } }); out.msg = `${rows.length} points`; return true; }
     case "estimates": { const [sub, ...restT] = stTokens(P.main); const s = (sub || "").toLowerCase(); const nm = stUnq(restT[0] || "");
       if (s === "store" || s === "sto") { const e = S.est.last; if (!e) throw new Error("Run a model first."); if (!nm) throw new Error("Name it: to_estimates store m1"); e.name = nm; out.msg = `last model stored as ${nm}`; return true; }

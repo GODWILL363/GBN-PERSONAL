@@ -6,12 +6,24 @@ import { US } from "../core/store";
 import { C, COUNTRIES, Ico, PLANS, checkPw, checkUn, globalCSS, ink, pwRules } from "../core/theme";
 
 // ── CSV Import & Frequency Auto-Detection ────────────────────────────────────
+// CSV/TSV reader: quoted fields may hold commas, quotes ("") and line breaks, e.g. "Egypt, Arab Rep."
 const parseCSV = (text) => {
-  const lines = text.trim().split(/\r?\n/).filter(l=>l.trim());
-  if(lines.length<2) return {error:"CSV needs a header row and at least one data row."};
-  const delim = lines[0].includes("\t")?"\t":(lines[0].includes(";")?";":",");
-  const headers = lines[0].split(delim).map(h=>h.trim().replace(/^["']|["']$/g,""));
-  const rows = lines.slice(1).map(l=>l.split(delim).map(c=>c.trim().replace(/^["']|["']$/g,"")));
+  const src = String(text || "").replace(/^﻿/, "");
+  const first = (src.match(/^[^\r\n]*/) || [""])[0];
+  const count = (ch) => { let n = 0, q = false; for (const c of first) { if (c === '"') q = !q; else if (!q && c === ch) n++; } return n; };
+  const delim = count("\t") > 0 ? "\t" : count(";") > count(",") ? ";" : ",";
+  const recs = []; let row = [], cell = "", q = false, quoted = false;
+  const endCell = () => { row.push(quoted ? cell : cell.trim()); cell = ""; quoted = false; };
+  for (let i = 0; i < src.length; i++) { const c = src[i];
+    if (q) { if (c === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; continue; }
+    if (c === '"' && cell.trim() === "") { q = true; quoted = true; cell = ""; continue; }
+    if (c === delim) { endCell(); continue; }
+    if (c === "\n" || c === "\r") { if (c === "\r" && src[i + 1] === "\n") i++; endCell(); if (row.some(x => x !== "")) recs.push(row); row = []; continue; }
+    cell += c; }
+  endCell(); if (row.some(x => x !== "")) recs.push(row);
+  if (recs.length < 2) return {error:"CSV needs a header row and at least one data row."};
+  const headers = recs[0].map(h => h.trim());
+  const rows = recs.slice(1).map(r => r.map(c => String(c).trim()));
   return {headers, rows, delim};
 };
 // Auto-detect the time/date column and its frequency
